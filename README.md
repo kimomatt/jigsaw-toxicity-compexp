@@ -1,4 +1,4 @@
-# Jigsaw Toxicity CoMExp
+# Jigsaw Toxicity Compexp
 
 Multi-label toxicity fine-tuning and compositional explanation workflow.
 
