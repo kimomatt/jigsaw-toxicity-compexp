@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.log
+*.tmp
+.env
+.env.*
+sequence_classification/
+sequence_classification_debug/
+saved_model*/
+**/predictions/*.csv
+**/predictions/*.json
+jigsaw-toxic-comment-classification-challenge/

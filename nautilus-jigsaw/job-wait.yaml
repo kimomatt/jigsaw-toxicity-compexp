@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mkimotsu-jigsaw-qlora-wait
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: mkimotsu-jigsaw-qlora-pvc
+      containers:
+        - name: jigsaw-qlora
+          image: pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+          resources:
+            requests:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+            limits:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euxo pipefail
+              mkdir -p /workspace
+              cd /workspace
+              echo "Pod ready. Copy files into /workspace, then exec into pod to run manually."
+              sleep 7200

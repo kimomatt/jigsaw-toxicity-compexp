@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mkimotsu-jigsaw-qlora-run
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: mkimotsu-jigsaw-qlora-pvc
+      containers:
+        - name: jigsaw-qlora
+          image: pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+          resources:
+            requests:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+            limits:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          env:
+            # Populate these from your Nautilus secret, then uncomment if needed.
+            # - name: HF_TOKEN
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: mkimotsu-secrets
+            #       key: hf_token
+            # - name: KAGGLE_USERNAME
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: mkimotsu-secrets
+            #       key: kaggle_username
+            # - name: KAGGLE_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: mkimotsu-secrets
+            #       key: kaggle_key
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euxo pipefail
+              cd /workspace
+
+              # Assumes you copied the cleaned notebook/script to /workspace first.
+              # Recommended: keep a .py training script for reliable batch execution.
+
+              pip install -U "numpy<2"
+              pip install "torch==2.2.2" "torchvision==0.17.2" tensorboard
+              pip install "triton==2.2.0"
+              pip install --upgrade \
+                "transformers==4.44.2" \
+                "datasets==2.18.0" \
+                "accelerate==0.33.0" \
+                "evaluate==0.4.1" \
+                "bitsandbytes==0.43.1" \
+                "huggingface_hub==0.24.6" \
+                "trl==0.8.6" \
+                "peft==0.12.0" \
+                "iterative-stratification"
+
+              # Option A: run a Python script
+              # python llama_jigsaw_toxicity_classification.py
+
+              # Option B: execute notebook in batch (requires notebook to be non-interactive)
+              pip install jupyter nbconvert
+              jupyter nbconvert --to notebook --execute \
+                --ExecutePreprocessor.timeout=-1 \
+                --output llama_jigsaw_toxicity_classification.executed.ipynb \
+                llama_jigsaw_toxicity_classification.ipynb
