@@ -7,6 +7,8 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.product: "NVIDIA-GeForce-RTX-3090"
       volumes:
         - name: workspace
           persistentVolumeClaim:
@@ -28,21 +30,21 @@ spec:
               mountPath: /workspace
           env:
             # Populate these from your Nautilus secret, then uncomment if needed.
-            # - name: HF_TOKEN
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: mkimotsu-secrets
-            #       key: hf_token
-            # - name: KAGGLE_USERNAME
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: mkimotsu-secrets
-            #       key: kaggle_username
-            # - name: KAGGLE_KEY
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: mkimotsu-secrets
-            #       key: kaggle_key
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: hf_token
+            - name: KAGGLE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: kaggle_username
+            - name: KAGGLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: kaggle_key
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -52,26 +54,22 @@ spec:
               # Assumes you copied the cleaned notebook/script to /workspace first.
               # Recommended: keep a .py training script for reliable batch execution.
 
-              pip install -U "numpy<2"
-              pip install "torch==2.2.2" "torchvision==0.17.2" tensorboard
-              pip install "triton==2.2.0"
-              pip install --upgrade \
+              pip install -U "numpy<2" tensorboard
+              pip install -U \
                 "transformers==4.44.2" \
+                "huggingface_hub==0.25.2" \
                 "datasets==2.18.0" \
                 "accelerate==0.33.0" \
                 "evaluate==0.4.1" \
-                "bitsandbytes==0.43.1" \
-                "huggingface_hub==0.24.6" \
-                "trl==0.8.6" \
-                "peft==0.12.0" \
                 "iterative-stratification"
 
               # Option A: run a Python script
-              # python llama_jigsaw_toxicity_classification.py
+              mkdir -p /workspace/logs
+              python llama_jigsaw_toxicity_classification_only_head_train.py 2>&1 | tee /workspace/logs/head_only_run_$(date +%Y%m%d_%H%M%S).log
 
               # Option B: execute notebook in batch (requires notebook to be non-interactive)
-              pip install jupyter nbconvert
-              jupyter nbconvert --to notebook --execute \
-                --ExecutePreprocessor.timeout=-1 \
-                --output llama_jigsaw_toxicity_classification.executed.ipynb \
-                llama_jigsaw_toxicity_classification.ipynb
+              # pip install jupyter nbconvert
+              # jupyter nbconvert --to notebook --execute \
+              #   --ExecutePreprocessor.timeout=-1 \
+              #   --output llama_jigsaw_toxicity_classification.executed.ipynb \
+              #   llama_jigsaw_toxicity_classification.ipynb
