@@ -3,8 +3,14 @@
 ## Results Summary
 - Head-only training was unstable in `float16` but became stable in `bfloat16`.
 - The first loss computation was finite; NaNs appeared after the first optimizer update, indicating update-time numeric instability in the fp16 path.
-- A full `bfloat16` run completed all `35904 / 35904` steps, but validation performance was weak and plateaued by epoch 1.
-- The final crash was a post-training checkpoint reload issue (`.bin` expected, sharded `.safetensors` present), not a training stability failure.
+- An initial full `bfloat16` run completed all `35904 / 35904` steps, but validation performance was weak and plateaued by epoch 1.
+- After restoring the important training settings under `bfloat16` (`learning_rate=1e-4`, `weight_decay=0.01`, capped `pos_weight`, fp32 logits in loss), head-only performance improved dramatically and remained stable through a full 2-epoch run.
+- The later rerun plateaued between epoch 1 and epoch 2, suggesting the restored head-only setup is viable but saturates quickly.
+- The post-training export bug was fixed by casting logits to fp32 before NumPy conversion.
+- Export recovery succeeded on a `3090`: first on a 256-example smoke slice, then on the full validation split.
+- The main operational blocker in export recovery was infrastructure selection / PVC usage, not remaining export logic bugs:
+  - export-only OOMed on an `RTX 2080 Ti` (11GB VRAM),
+  - and one full-export pod sat in `ContainerCreating` for hours while a wait pod was also mounted to the same PVC, suggesting PVC mount/attach contention or related startup delay.
 
 ## Scope
 This document tracks the debugging history for:
@@ -188,13 +194,163 @@ Interpretation:
 - Immediate fix for future reruns:
   - set `load_best_model_at_end=False`
 
----
+### 17) Restored key training settings under `bfloat16`
+- Reverted the temporary ultra-conservative training settings while keeping the `bfloat16` load path.
+- Restored:
+  - `learning_rate=1e-4`
+  - `weight_decay=0.01`
+  - capped `pos_weight` (still capped at `30.0`, not fully uncapped)
+  - fp32 logits in the BCE loss path
+  - `max_grad_norm=1.0`
+- Kept excluded:
+  - `fp16=True` in `TrainingArguments`
+  - `model.score.float()`
+- Purpose:
+  - test whether `float16` had been the real cause of instability, rather than the restored optimization settings themselves
 
-## Operational Issues Encountered
-- Wrong `job-run.yaml` applied from a different directory once (ran `nbconvert` path, not script path).
-- Existing completed wait job reused accidentally (needed delete + recreate).
-- Pod/job cleanup and namespace drift caused ambiguity in logs.
-- Pod logs sometimes unavailable; PVC logs are the source of truth.
+### 18) Restored-config head-only rerun stayed numerically stable
+- Early debug output remained finite through at least `DEBUG step-call=19`
+- Subsequent trainer logs showed:
+  - finite loss values
+  - finite `grad_norm`
+  - no immediate `NaN` logits
+  - no `Non-finite loss detected`
+- Interpretation:
+  - restoring capped `pos_weight` and the less conservative optimizer settings did not recreate the earlier `float16` instability
+  - this strongly supports the conclusion that the original blow-up was primarily due to the `float16` path
+
+### 19) Restored-config head-only rerun produced much stronger metrics
+- Full rerun completed:
+  - `35904 / 35904` steps
+  - `train_runtime = 25199.8818` seconds (`6:59:59.88`)
+- Epoch 1 eval:
+  - `eval_loss = 0.6562253832817078`
+  - `eval_micro_f1 = 0.5741170404743491`
+  - `eval_macro_f1 = 0.4569263388199886`
+  - `eval_samples_f1 = 0.04738087732823916`
+  - `eval_subset_accuracy = 0.8776789071312194`
+- Epoch 2 eval:
+  - `eval_loss = 0.6344109177589417`
+  - `eval_micro_f1 = 0.5734921439432337`
+  - `eval_macro_f1 = 0.45521651647824873`
+  - `eval_samples_f1 = 0.04825822998213022`
+  - `eval_subset_accuracy = 0.8763002882566737`
+- Relative to the earlier weak `bfloat16` head-only baseline:
+  - `eval_micro_f1` improved from about `0.0735` to about `0.574`
+  - `eval_macro_f1` improved from about `0.0694` to about `0.4569`
+- Interpretation:
+  - head-only is not inherently unusable on this task
+  - the earlier weak result was heavily confounded by the stripped-down stability settings forced by the `float16` failures
+
+### 20) Improved rerun still plateaued after epoch 1
+- Epoch 2 slightly improved `eval_loss`, but headline F1 metrics were effectively flat relative to epoch 1.
+- Interpretation:
+  - the restored head-only setup learns a meaningful signal
+  - but most of the useful learning appears to happen by the end of epoch 1
+  - additional epochs alone are unlikely to be the main lever for further improvement
+
+### 21) New post-training failure: export path with `bfloat16` logits
+- Training and built-in evaluation completed successfully.
+- The crash happened later during the optional prediction-export block:
+  - in `infer_probabilities()`
+  - at `probs = torch.sigmoid(logits).numpy()`
+- Error:
+  - `TypeError: Got unsupported ScalarType BFloat16`
+- Consequence:
+  - training artifacts and eval metrics were saved
+  - but `/workspace/sequence_classification/predictions` was not created
+  - so `val_predictions.csv`, `per_label_metrics.csv`, `overall_metrics.json`, and `thresholds.json` were not written
+- Immediate fix:
+  - cast logits to fp32 before NumPy conversion, e.g. `torch.sigmoid(logits.float()).numpy()`
+
+### 22) Recovery work after the export failure
+- Patched the head-only script to:
+  - cast logits to fp32 before converting to NumPy
+  - support `--export-only`
+  - support `--saved-model-dir` so prediction artifacts can be regenerated from `/workspace/sequence_classification/saved_model` without retraining
+- Verified that the following training artifacts already existed on PVC:
+  - `saved_model/`
+  - `checkpoint-17952/`
+  - `checkpoint-35904/`
+  - `eval_results.json`
+  - `train_results.json`
+  - `all_results.json`
+  - `trainer_state.json`
+- Confirmed that `predictions/` still did not exist after the failed run.
+- Practical implication:
+  - retraining is not required to recover prediction artifacts
+  - only the post-training export step needs to be rerun successfully
+
+### 23) Added export-debugging controls and logs
+- Extended the head-only script to support:
+  - `--export-limit`
+  - `--export-batch-size`
+- Added explicit export progress prints:
+  - export device print
+  - batch count print
+  - periodic `Completed export batch ...` progress lines
+- Skipped tokenized-dataset construction in `--export-only` mode.
+- Also fixed an intermediate control-flow bug where export-only could still reference `tokenized` and crash with:
+  - `UnboundLocalError: local variable 'tokenized' referenced before assignment`
+
+### 24) Confirmed export-only OOM on `RTX 2080 Ti`
+- Running export-only from a wait pod on an `RTX 2080 Ti` reproduced a clear hardware limit.
+- Failure:
+  - `torch.cuda.OutOfMemoryError`
+- The failure occurred at:
+  - `model = model.to(export_device)`
+- Interpretation:
+  - the patched export path was no longer silently failing
+  - the remaining blocker on that pod was insufficient VRAM, not incorrect export logic
+
+### 25) Smoke export succeeded on a `3090`
+- A dedicated export job targeting `NVIDIA-GeForce-RTX-3090` was created.
+- Smoke export config:
+  - `--export-only`
+  - `--saved-model-dir /workspace/sequence_classification/saved_model`
+  - `--output-dir /workspace/sequence_classification`
+  - `--export-limit 256`
+  - `--export-batch-size 8`
+- Smoke run completed successfully and wrote:
+  - `predictions/overall_metrics.json`
+  - `predictions/per_label_metrics.csv`
+  - `predictions/thresholds.json`
+  - `predictions/val_predictions.csv`
+- Smoke metrics:
+  - `micro_f1 = 0.5401459854014599`
+  - `macro_f1 = 0.33289686370681076`
+  - `samples_f1 = 0.052046130952380955`
+  - `subset_accuracy = 0.875`
+- Interpretation:
+  - the smoke run validated the export path
+  - but the slice was too small for meaningful rare-label conclusions (`threat` had zero positives; some labels had only one positive)
+
+
+### 26) Full export recovery completed successfully
+- Export log showed:
+  - `Starting export inference over 15958 examples in 1995 batches (batch_size=8)`
+  - completion through `1995/1995`
+  - `Saved metrics: /workspace/sequence_classification/predictions`
+- Final exported artifacts on PVC:
+  - `overall_metrics.json`
+  - `per_label_metrics.csv`
+  - `thresholds.json`
+  - `val_predictions.csv`
+- Final exported overall metrics matched the successful epoch-2 eval:
+  - `micro_f1 = 0.5734921439432337`
+  - `macro_f1 = 0.45521651647824873`
+  - `samples_f1 = 0.04825822998213022`
+  - `subset_accuracy = 0.8763002882566737`
+- Final per-label F1:
+  - `toxic = 0.6485753052917232`
+  - `obscene = 0.6088794926004228`
+  - `insult = 0.5891387822270981`
+  - `severe_toxic = 0.3356164383561644`
+  - `identity_hate = 0.3325942350332594`
+  - `threat = 0.21649484536082475`
+- Practical implication:
+  - the export recovery is complete
+  - prediction artifacts are now available for explanation/probing analysis without retraining
 
 ---
 
@@ -203,46 +359,24 @@ Interpretation:
 ### Finding 1: head-only can be made stable
 The instability was not ultimately caused by `pos_weight` alone. The decisive fix was moving from fp16 to bfloat16.
 
-### Finding 2: head-only performance is weak
-Even after stability was achieved, the validation metrics were poor:
-- `eval_macro_f1 = 0.0694`
-- `eval_micro_f1 = 0.0735`
+### Finding 2: the earlier weak head-only result was not the final story
+Once the important training settings were restored under `bfloat16`, head-only performance improved dramatically:
+- `eval_macro_f1` rose to about `0.457`
+- `eval_micro_f1` rose to about `0.574`
 
-This is the main modeling result from the experiment.
+This is the main modeling result from the restored-config rerun.
 
-### Finding 3: learning plateaued almost immediately
-Epoch 1 and epoch 2 evaluation metrics were effectively identical, which indicates training was stable enough to continue but did not produce meaningful improvement after the first epoch.
+### Finding 3: restored head-only is viable but still plateaus quickly
+The improved run learned a meaningful signal by epoch 1, but epoch 2 produced little additional F1 improvement. The setup appears useful, but quickly saturating.
 
-### Finding 4: the final run was operationally successful but not cleanly terminated
-The run finished training and evaluation, but crashed during best-checkpoint reload because the expected `.bin` checkpoint file was not present.
+### Finding 4: the remaining failure is now in post-training export, not training stability
+This was true before recovery, but is no longer the current state.
 
-This is a post-training artifact-management issue, not a training-stability issue.
+The export issue has now been resolved:
+- fp32 casting fixed the `bfloat16` to NumPy problem
+- smoke export succeeded on a `3090`
+- full export succeeded on a `3090`
 
----
-
-## Current Recommendation
-
-Use head-only as a baseline and pivot effort back to PEFT/LoRA.
-
-Reason:
-- the engineering question has been answered: head-only can run
-- the modeling result is weak enough that further head-only tuning is unlikely to be the best use of time
-
-If another head-only rerun is needed only for cleanup:
-- keep `torch_dtype=torch.bfloat16`
-- keep the conservative optimizer settings
-- set `load_best_model_at_end=False`
-- keep evaluation/reporting identical so results remain comparable
-
----
-
-## Quick Command Checklist
-```bash
-# inspect newest PVC log via wait pod
-kubectl exec -it <WAIT_POD> -- ls -ltr /workspace/logs | tail -n 5
-kubectl exec -it <WAIT_POD> -- tail -n 200 /workspace/logs/<LATEST_LOG_FILE>
-kubectl exec -it <WAIT_POD> -- grep -E "DEBUG step-call|loss_mat|Non-finite loss|Traceback|Training complete|eval_macro_f1|eval_micro_f1" /workspace/logs/<LATEST_LOG_FILE>
-
-# inspect checkpoint layout
-kubectl exec -it <WAIT_POD> -- ls -R /workspace/sequence_classification | head -300
-```
+The practical blocker turned out to be infrastructure:
+- `2080 Ti` VRAM was insufficient for export-only model transfer
+- a full-export pod spent hours in `ContainerCreating` while another pod was mounted to the same PVC, suggesting mount/attach contention rather than a remaining code bug

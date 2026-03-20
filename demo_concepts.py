@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from concepts.build import build_concept_set
-from concepts.tier1_words import BASE_LEXICON, build_tier1_vocabulary
+from concepts.tier1_words import build_tier1_vocabulary
 from concepts.utils import coverage_stats, pretty_print_single, validate_binary_matrix
 
 
@@ -266,7 +266,7 @@ def run_phase_5_ramp() -> None:
 
 
 def run_phase_6_tier1_vocab() -> None:
-    """Phase 6: build Tier 1 vocabulary from base lexicon + top-k frequent tokens."""
+    """Phase 6: build Tier 1 vocabulary from top-k frequent spaCy tokens."""
     dataset_dir = Path("jigsaw-toxic-comment-classification-challenge")
     print("\n=== Phase 6: Tier 1 Vocabulary Builder ===")
     try:
@@ -279,12 +279,10 @@ def run_phase_6_tier1_vocab() -> None:
     max_doc_frac = 0.4
     vocab = build_tier1_vocabulary(
         fit_texts,
-        base_lexicon=BASE_LEXICON,
         top_k=300,
         min_doc_freq=20,
         max_doc_frac=max_doc_frac,
     )
-    print("Base lexicon size:", len(BASE_LEXICON))
     print("Built vocabulary size:", len(vocab))
     print("First 20 vocab words:", ", ".join(vocab[:20]))
 
@@ -298,7 +296,6 @@ def run_phase_6_tier1_vocab() -> None:
         meta={
             "demo_phase": 6,
             "dataset": "jigsaw_train_csv",
-            "tier1_base_lexicon_size": len(BASE_LEXICON),
             "tier1_top_k": 300,
             "tier1_min_doc_freq": 20,
             "tier1_max_doc_frac": max_doc_frac,

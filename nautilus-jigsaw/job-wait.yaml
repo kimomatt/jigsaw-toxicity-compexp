@@ -33,4 +33,4 @@ spec:
               mkdir -p /workspace
               cd /workspace
               echo "Pod ready. Copy files into /workspace, then exec into pod to run manually."
-              sleep 7200
+              sleep 28800

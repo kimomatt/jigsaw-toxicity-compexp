@@ -176,8 +176,15 @@ def infer_probabilities(model, tokenizer, df: pd.DataFrame, max_len: int, batch_
     # at a high level basically doing evaluation again, but this time manually without the Trainer's built in eval loop
     model.eval()
     device = next(model.parameters()).device
+    print(f"Running export inference on device: {device}")
     sentences = df["input"].tolist()
     all_logits = []
+    total_batches = (len(sentences) + batch_size - 1) // batch_size
+
+    print(
+        f"Starting export inference over {len(sentences)} examples "
+        f"in {total_batches} batches (batch_size={batch_size})"
+    )
 
     for i in range(0, len(sentences), batch_size):
         batch = sentences[i : i + batch_size]
@@ -193,9 +200,12 @@ def infer_probabilities(model, tokenizer, df: pd.DataFrame, max_len: int, batch_
             # detach from graph and move to cpu to avoid unnecessary gpu memory usage during inference accumulation
             outputs = model(**inputs)
             all_logits.append(outputs.logits.detach().cpu())
+        batch_idx = (i // batch_size) + 1
+        if batch_idx == 1 or batch_idx == total_batches or batch_idx % 50 == 0:
+            print(f"Completed export batch {batch_idx}/{total_batches}")
 
     logits = torch.cat(all_logits, dim=0)
-    probs = torch.sigmoid(logits).numpy()
+    probs = torch.sigmoid(logits.float()).numpy()
     return probs
 
 
@@ -281,17 +291,23 @@ def parse_args():
     parser.add_argument("--competition", type=str, default="jigsaw-toxic-comment-classification-challenge")
     parser.add_argument("--model-name", type=str, default="meta-llama/Llama-3.1-8B")
     parser.add_argument("--output-dir", type=Path, default=Path("sequence_classification"))
+    parser.add_argument("--saved-model-dir", type=Path, default=None)
     parser.add_argument("--max-len", type=int, default=512)
     parser.add_argument("--train-batch-size", type=int, default=8)
     parser.add_argument("--eval-batch-size", type=int, default=8)
     parser.add_argument("--num-epochs", type=int, default=2)
-    parser.add_argument("--learning-rate", type=float, default=1e-6)
-    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--val-size", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--sweep-thresholds", action="store_true")
     parser.add_argument("--sweep-per-label", action="store_true")
+    parser.add_argument("--use-pos-weight", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--load-best-model-at-end", action="store_true")
+    parser.add_argument("--export-only", action="store_true")
+    parser.add_argument("--export-limit", type=int, default=None)
+    parser.add_argument("--export-batch-size", type=int, default=32)
     parser.add_argument("--smoke-test", action="store_true")
     # Smoke test mode is for fast pipeline validation before long runs.
     parser.add_argument("--smoke-train-size", type=int, default=1000)
@@ -311,13 +327,16 @@ def main():
     maybe_download_kaggle(args.competition, args.dataset_dir)
     df = load_and_prepare_df(args.dataset_dir)
     df_train, df_val = split_multilabel(df, val_size=args.val_size, seed=args.seed)
-    # pos_weight = compute_pos_weight(df_train)
-    pos_weight = None
-    # print("pos_weight:", {c: float(w) for c, w in zip(TOX_COLS, pos_weight)})
-    # print("pos_weight min/max:", float(pos_weight.min()), float(pos_weight.max()))
+    pos_weight = compute_pos_weight(df_train) if args.use_pos_weight else None
+    if pos_weight is None:
+        print("pos_weight: disabled")
+    else:
+        print("pos_weight:", {c: float(w) for c, w in zip(TOX_COLS, pos_weight)})
+        print("pos_weight min/max:", float(pos_weight.min()), float(pos_weight.max()))
 
+    model_source = args.saved_model_dir or args.model_name
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.model_name,
+        model_source,
         token=hf_token,
         num_labels=len(TOX_COLS),
         problem_type="multi_label_classification",
@@ -325,27 +344,28 @@ def main():
         low_cpu_mem_usage=True,
     )
 
-    # freezing the llama backbone
-    # requires_grad tells PyTorch whether to compute gradients for those parameters during backpropagation, which is necessary for training
-    # gradients tell the optimizer how to update teh weights, the direction to move the weight and how strongly to move it based on the loss
-    for p in model.model.parameters():
-        p.requires_grad = False
+    if not args.export_only:
+        # freezing the llama backbone
+        # requires_grad tells PyTorch whether to compute gradients for those parameters during backpropagation, which is necessary for training
+        # gradients tell the optimizer how to update teh weights, the direction to move the weight and how strongly to move it based on the loss
+        for p in model.model.parameters():
+            p.requires_grad = False
 
-    # keeps only the classification head trainable, which is a small fraction of the total parameters
-    # model.score learns weight matrix + bias to map hidden states to toxicity logits
-    # hidden states are the internal vectors that represent the input text after being processed by the model, and the score layer learns to interpret those vectors for our specific classification task
-    # only looking at the final layer's hidden state but there is a hidden state for each layer
-    for p in model.score.parameters():
-        p.requires_grad = True
+        # keeps only the classification head trainable, which is a small fraction of the total parameters
+        # model.score learns weight matrix + bias to map hidden states to toxicity logits
+        # hidden states are the internal vectors that represent the input text after being processed by the model, and the score layer learns to interpret those vectors for our specific classification task
+        # only looking at the final layer's hidden state but there is a hidden state for each layer
+        for p in model.score.parameters():
+            p.requires_grad = True
 
-    # sanity-check: verify exactly which parameters are trainable
-    trainable_names = [n for n, p in model.named_parameters() if p.requires_grad]
-    trainable_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total_count = sum(p.numel() for p in model.parameters())
-    print(f"Trainable params: {trainable_count:,} / {total_count:,} ({100 * trainable_count / total_count:.6f}%)")
-    print("Trainable parameter names:")
-    for name in trainable_names:
-        print(f"  - {name}")
+        # sanity-check: verify exactly which parameters are trainable
+        trainable_names = [n for n, p in model.named_parameters() if p.requires_grad]
+        trainable_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_count = sum(p.numel() for p in model.parameters())
+        print(f"Trainable params: {trainable_count:,} / {total_count:,} ({100 * trainable_count / total_count:.6f}%)")
+        print("Trainable parameter names:")
+        for name in trainable_names:
+            print(f"  - {name}")
 
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, token=hf_token, add_prefix_space=True)
@@ -358,81 +378,100 @@ def main():
     model.config.pretraining_tp = 1
     # model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 
-    tokenized = build_tokenized_dataset(df_train, df_val, tokenizer, max_len=args.max_len)
-    collate_fn = DataCollatorWithPadding(tokenizer=tokenizer)
+    if args.export_only:
+        export_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(export_device)
+        print(f"Loaded export-only model onto device: {export_device}")
 
     if args.smoke_test:
         # tiny debug subsets / debug training args flow
-        train_ds = tokenized["train"].select(range(min(args.smoke_train_size, len(tokenized["train"]))))
-        val_ds = tokenized["val"].select(range(min(args.smoke_val_size, len(tokenized["val"]))))
         max_steps = args.smoke_max_steps
         num_epochs = 1
         eval_strategy = "steps"
         eval_steps = max(1, max_steps // 2)
         save_strategy = "steps"
         save_steps = max_steps
+        logging_steps = 10
     else:
         # full training path
-        train_ds = tokenized["train"]
-        val_ds = tokenized["val"]
         max_steps = -1
         num_epochs = args.num_epochs
         eval_strategy = "epoch"
         eval_steps = None
         save_strategy = "epoch"
         save_steps = None
+        logging_steps = 20
 
-    training_args = TrainingArguments(
-        output_dir=str(args.output_dir),
-        learning_rate=args.learning_rate,
-        per_device_train_batch_size=args.train_batch_size,
-        per_device_eval_batch_size=args.eval_batch_size,
-        num_train_epochs=num_epochs,
-        max_steps=max_steps,
-        weight_decay=args.weight_decay,
-        eval_strategy=eval_strategy,
-        eval_steps=eval_steps,
-        save_strategy=save_strategy,
-        save_steps=save_steps,
-        load_best_model_at_end=(not args.smoke_test),
-        # macro_f1 as best model metric
-        metric_for_best_model="eval_macro_f1",
-        greater_is_better=True,
-        logging_steps=10 if args.smoke_test else 100,
-        report_to="none",
-        max_grad_norm=1.0,
-    )
+    if not args.export_only:
+        tokenized = build_tokenized_dataset(df_train, df_val, tokenizer, max_len=args.max_len)
+        collate_fn = DataCollatorWithPadding(tokenizer=tokenizer)
 
-    trainer = CustomTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=val_ds,
-        tokenizer=tokenizer,
-        data_collator=collate_fn,
-        compute_metrics=compute_metrics,
-        # using pos_weight instead of class weight
-        pos_weight=pos_weight,
-    )
+        if args.smoke_test:
+            train_ds = tokenized["train"].select(range(min(args.smoke_train_size, len(tokenized["train"]))))
+            val_ds = tokenized["val"].select(range(min(args.smoke_val_size, len(tokenized["val"]))))
+        else:
+            train_ds = tokenized["train"]
+            val_ds = tokenized["val"]
 
-    train_result = trainer.train()
-    eval_metrics = trainer.evaluate()
+        training_args = TrainingArguments(
+            output_dir=str(args.output_dir),
+            learning_rate=args.learning_rate,
+            per_device_train_batch_size=args.train_batch_size,
+            per_device_eval_batch_size=args.eval_batch_size,
+            num_train_epochs=num_epochs,
+            max_steps=max_steps,
+            weight_decay=args.weight_decay,
+            eval_strategy=eval_strategy,
+            eval_steps=eval_steps,
+            save_strategy=save_strategy,
+            save_steps=save_steps,
+            load_best_model_at_end=(args.load_best_model_at_end and (not args.smoke_test)),
+            # macro_f1 as best model metric
+            metric_for_best_model="eval_macro_f1",
+            greater_is_better=True,
+            logging_steps=logging_steps,
+            report_to="none",
+            max_grad_norm=1.0,
+        )
+
+        trainer = CustomTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=val_ds,
+            tokenizer=tokenizer,
+            data_collator=collate_fn,
+            compute_metrics=compute_metrics,
+            # using pos_weight instead of class weight
+            pos_weight=pos_weight,
+        )
+
+        train_result = trainer.train()
+        eval_metrics = trainer.evaluate()
+
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        trainer.log_metrics("train", train_result.metrics)
+        trainer.save_metrics("train", train_result.metrics)
+        trainer.save_metrics("eval", eval_metrics)
+        trainer.save_state()
+        trainer.save_model(str(args.output_dir / "saved_model"))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    trainer.log_metrics("train", train_result.metrics)
-    trainer.save_metrics("train", train_result.metrics)
-    trainer.save_metrics("eval", eval_metrics)
-    trainer.save_state()
-    trainer.save_model(str(args.output_dir / "saved_model"))
 
     # Optional prediction report on val subset/full val.
     df_eval_source = df_val.head(500) if args.smoke_test else df_val
+    if args.export_limit is not None:
+        df_eval_source = df_eval_source.head(args.export_limit).reset_index(drop=True)
+        print(f"Export limit enabled: {len(df_eval_source)} examples")
+    else:
+        df_eval_source = df_eval_source.reset_index(drop=True)
+
     probs = infer_probabilities(
         model=model,
         tokenizer=tokenizer,
         df=df_eval_source,
         max_len=args.max_len,
-        batch_size=32,
+        batch_size=args.export_batch_size,
     )
     y_true_eval = np.array(df_eval_source["labels"].tolist(), dtype=int)
     if args.sweep_thresholds:

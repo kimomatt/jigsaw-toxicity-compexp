@@ -7,8 +7,8 @@ from typing import Dict, Optional, Sequence
 import numpy as np
 
 from .base import ConceptSet
-from .tier1_words import make_word_concepts
-from .tier2_primitives import make_primitive_concepts
+from .tier1_words import build_word_concept_values, make_word_concepts
+from .tier2_primitives import build_linguistic_concept_values, make_linguistic_concepts
 from .tier3_clusters import make_cluster_concepts
 from .utils import validate_binary_matrix
 
@@ -31,7 +31,7 @@ def build_concept_set(
             raise ValueError("Tier 1 requires tier1_words")
         concepts = make_word_concepts(tier1_words)
     elif tier == 2:
-        concepts = make_primitive_concepts()
+        concepts = make_linguistic_concepts()
     elif tier == 3:
         if tier3_assignments is None:
             raise ValueError("Tier 3 requires tier3_assignments")
@@ -51,8 +51,13 @@ def build_concept_set(
         deduped.append(concept)
     concepts = sorted(deduped, key=lambda c: c.name)
 
-    cols = [concept.fn(texts).astype(np.uint8, copy=False) for concept in concepts]
-    values = np.column_stack(cols) if cols else np.zeros((n, 0), dtype=np.uint8)
+    if tier == 1:
+        values = build_word_concept_values(texts, [concept.name.split("::", 1)[1] for concept in concepts])
+    elif tier == 2:
+        values = build_linguistic_concept_values(texts)
+    else:
+        cols = [concept.fn(texts).astype(np.uint8, copy=False) for concept in concepts]
+        values = np.column_stack(cols) if cols else np.zeros((n, 0), dtype=np.uint8)
     validate_binary_matrix(values)
 
     out_meta: Dict = dict(meta or {})

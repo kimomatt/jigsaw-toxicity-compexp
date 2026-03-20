@@ -1,177 +1,192 @@
-"""Tier 2 portable rule-based primitive concepts."""
+"""Tier 2 explicit linguistic concepts built from spaCy annotations."""
 
 from __future__ import annotations
 
-import re
-from typing import List, Sequence
+from functools import lru_cache
+from typing import Callable, List, Sequence
 
 import numpy as np
+import spacy
+from spacy.tokens import Doc
 
 from .base import Concept
-from .utils import tokenize
 
 FIRST_PERSON = {"i", "me", "my", "mine", "myself", "we", "us", "our", "ours", "ourselves"}
 SECOND_PERSON = {"you", "your", "yours", "yourself", "yourselves", "u", "ur"}
-NEGATION = {"not", "no", "never", "none", "cannot"}
-MODALS = {"can", "could", "should", "would", "may", "might", "must", "will", "shall"}
-NEGATIVE_WORDS = {"idiot", "stupid", "dumb", "hate", "awful", "terrible", "trash", "loser"}
-POSITIVE_WORDS = {"good", "great", "love", "nice", "excellent", "amazing", "thanks", "happy"}
-VIOLENCE_WORDS = {"kill", "hurt", "attack", "fight", "punch", "shoot", "stab", "destroy"}
-MONEY_WORDS = {"money", "cash", "dollar", "dollars", "bucks", "price", "pay", "paid"}
+THIRD_PERSON = {
+    "he",
+    "him",
+    "his",
+    "himself",
+    "she",
+    "her",
+    "hers",
+    "herself",
+    "they",
+    "them",
+    "their",
+    "theirs",
+    "themself",
+    "themselves",
+}
+MODAL_LEMMAS = {"can", "could", "may", "might", "must", "shall", "should", "will", "would"}
+QUOTE_CHARS = {'"', "“", "”", "`", "``", "''", "«", "»"}
+SUBJECT_DEPS = {"nsubj", "nsubjpass", "csubj", "expl"}
 
-URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
-EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
-ALL_CAPS_RE = re.compile(r"\b[A-Z]{3,}\b")
+
+@lru_cache(maxsize=1)
+def _get_tier2_nlp():
+    """Load the full English pipeline for explicit linguistic annotation."""
+    return spacy.load("en_core_web_sm")
 
 
-def _binary_from_texts(texts: Sequence[str], predicate) -> np.ndarray:
-    out = np.zeros(len(texts), dtype=np.uint8)
-    for i, text in enumerate(texts):
-        out[i] = np.uint8(1 if predicate(text) else 0)
-    return out
+def _parse_docs(texts: Sequence[str]) -> List[Doc]:
+    return list(_get_tier2_nlp().pipe(texts, batch_size=128))
 
 
-def make_primitive_concepts() -> List[Concept]:
-    """Construct Tier 2 rule-based concepts."""
+def _has_token(doc: Doc, vocab: set[str]) -> bool:
+    return any(token.lower_ in vocab for token in doc)
+
+
+def _has_entity(doc: Doc, label: str) -> bool:
+    return any(ent.label_ == label for ent in doc.ents)
+
+
+def _has_question_clause(doc: Doc, text: str) -> bool:
+    if "?" in text:
+        return True
+    return any(token.tag_ in {"WDT", "WP", "WP$", "WRB"} for token in doc)
+
+
+def _has_exclamation_clause(doc: Doc, text: str) -> bool:
+    return "!" in text
+
+
+def _has_quoted_span(doc: Doc, text: str) -> bool:
+    del doc
+    return any(char in text for char in QUOTE_CHARS)
+
+
+def _has_negated_predicate(doc: Doc, text: str) -> bool:
+    del text
+    return any(token.dep_ == "neg" for token in doc)
+
+
+def _has_modalized_predicate(doc: Doc, text: str) -> bool:
+    del text
+    return any(token.tag_ == "MD" or (token.dep_ == "aux" and token.lemma_.lower() in MODAL_LEMMAS) for token in doc)
+
+
+def _has_future_construction(doc: Doc, text: str) -> bool:
+    del text
+    for token in doc:
+        if token.lower_ in {"will", "shall", "'ll"}:
+            return True
+        if token.lower_ == "going" and token.dep_ in {"aux", "ROOT"}:
+            next_tokens = list(doc[token.i + 1 : token.i + 3])
+            if next_tokens and any(tok.lower_ == "to" for tok in next_tokens):
+                return True
+    return False
+
+
+def _has_imperative_clause(doc: Doc, text: str) -> bool:
+    del text
+    if not doc:
+        return False
+    for sent in doc.sents:
+        tokens = [token for token in sent if not token.is_punct and not token.is_space]
+        if not tokens:
+            continue
+        root = sent.root
+        if root.pos_ != "VERB":
+            continue
+        if any(child.dep_ in SUBJECT_DEPS for child in root.children):
+            continue
+        if tokens[0] == root:
+            return True
+    return False
+
+
+def _has_coordination(doc: Doc, text: str) -> bool:
+    del text
+    return any(token.dep_ in {"cc", "conj"} for token in doc)
+
+
+def _has_copular_predication(doc: Doc, text: str) -> bool:
+    del text
+    return any(token.dep_ == "cop" for token in doc)
+
+
+def _has_adjectival_predication(doc: Doc, text: str) -> bool:
+    del text
+    return any(token.dep_ in {"acomp", "amod"} or (token.dep_ == "ROOT" and token.pos_ == "ADJ") for token in doc)
+
+
+def _has_direct_address(doc: Doc, text: str) -> bool:
+    del text
+    return any(token.dep_ == "vocative" for token in doc) or (
+        _has_token(doc, SECOND_PERSON) and any(token.text == "," for token in doc)
+    )
+
+
+Extractor = tuple[str, str, Callable[[Doc, str], bool]]
+
+ACTIVE_EXTRACTORS: List[Extractor] = sorted([
+    (
+        "has_first_person_reference",
+        "Contains a first-person reference token.",
+        lambda doc, text: _has_token(doc, FIRST_PERSON),
+    ),
+    (
+        "has_second_person_reference",
+        "Contains a second-person reference token.",
+        lambda doc, text: _has_token(doc, SECOND_PERSON),
+    ),
+    (
+        "has_third_person_reference",
+        "Contains a third-person reference token.",
+        lambda doc, text: _has_token(doc, THIRD_PERSON),
+    ),
+    ("has_exclamation_clause", "Contains an exclamation mark.", _has_exclamation_clause),
+    ("has_quoted_span", "Contains quoted text.", _has_quoted_span),
+    ("has_negated_predicate", "Contains dependency-marked predicate negation.", _has_negated_predicate),
+    ("has_modalized_predicate", "Contains a modalized predicate.", _has_modalized_predicate),
+    ("has_direct_address", "Contains direct address / vocative structure.", _has_direct_address),
+], key=lambda item: item[0])
+
+DISABLED_EXTRACTORS: List[Extractor] = sorted([
+    ("has_person_entity", "Contains a named entity with PERSON label.", lambda doc, text: _has_entity(doc, "PERSON")),
+    ("has_org_entity", "Contains a named entity with ORG label.", lambda doc, text: _has_entity(doc, "ORG")),
+    ("has_gpe_entity", "Contains a named entity with GPE label.", lambda doc, text: _has_entity(doc, "GPE")),
+    ("has_question_clause", "Contains a question clause or wh-question form.", _has_question_clause),
+    ("has_future_construction", "Contains an explicit future construction such as will/shall/going to.", _has_future_construction),
+    ("has_imperative_clause", "Contains an imperative-like clause.", _has_imperative_clause),
+    ("has_coordination", "Contains a coordination structure.", _has_coordination),
+    ("has_copular_predication", "Contains a copular predicate.", _has_copular_predication),
+    ("has_adjectival_predication", "Contains adjectival predication or modification.", _has_adjectival_predication),
+], key=lambda item: item[0])
+
+
+def make_linguistic_concepts() -> List[Concept]:
+    """Construct explicit linguistic Tier 2 concepts."""
     concepts: List[Concept] = []
+    for name, description, extractor in ACTIVE_EXTRACTORS:
 
-    concepts.append(
-        Concept(
-            name="has_first_person",
-            tier=2,
-            description="Contains first-person pronoun tokens.",
-            fn=lambda texts: _binary_from_texts(
-                texts, lambda t: any(tok in FIRST_PERSON for tok in tokenize(t))
-            ),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_second_person",
-            tier=2,
-            description="Contains second-person pronoun tokens including 'u' and 'ur'.",
-            fn=lambda texts: _binary_from_texts(
-                texts, lambda t: any(tok in SECOND_PERSON for tok in tokenize(t))
-            ),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_negation",
-            tier=2,
-            description="Contains negation such as not/no/never/n't.",
-            fn=lambda texts: _binary_from_texts(
-                texts,
-                lambda t: any(tok in NEGATION or tok.endswith("n't") for tok in tokenize(t)),
-            ),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_modal",
-            tier=2,
-            description="Contains a modal verb.",
-            fn=lambda texts: _binary_from_texts(
-                texts, lambda t: any(tok in MODALS for tok in tokenize(t))
-            ),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="is_question",
-            tier=2,
-            description="Text contains a question mark.",
-            fn=lambda texts: _binary_from_texts(texts, lambda t: "?" in t),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="is_exclamation",
-            tier=2,
-            description="Text contains an exclamation mark.",
-            fn=lambda texts: _binary_from_texts(texts, lambda t: "!" in t),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_url",
-            tier=2,
-            description="Text contains a URL (http(s):// or www.).",
-            fn=lambda texts: _binary_from_texts(texts, lambda t: bool(URL_RE.search(t))),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_email",
-            tier=2,
-            description="Text contains an email address.",
-            fn=lambda texts: _binary_from_texts(texts, lambda t: bool(EMAIL_RE.search(t))),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_number",
-            tier=2,
-            description="Text contains a numeric token.",
-            fn=lambda texts: _binary_from_texts(texts, lambda t: bool(NUMBER_RE.search(t))),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_all_caps_word",
-            tier=2,
-            description="Contains an all-caps word with length >= 3.",
-            fn=lambda texts: _binary_from_texts(texts, lambda t: bool(ALL_CAPS_RE.search(t))),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="long_sentence",
-            tier=2,
-            description="Roughly long sentence (>=25 tokens).",
-            fn=lambda texts: _binary_from_texts(texts, lambda t: len(tokenize(t)) >= 25),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_negative_word",
-            tier=2,
-            description="Contains a negative lexicon word.",
-            fn=lambda texts: _binary_from_texts(
-                texts, lambda t: any(tok in NEGATIVE_WORDS for tok in tokenize(t))
-            ),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_positive_word",
-            tier=2,
-            description="Contains a positive lexicon word.",
-            fn=lambda texts: _binary_from_texts(
-                texts, lambda t: any(tok in POSITIVE_WORDS for tok in tokenize(t))
-            ),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_violence_word",
-            tier=2,
-            description="Contains a violence-related lexicon word.",
-            fn=lambda texts: _binary_from_texts(
-                texts, lambda t: any(tok in VIOLENCE_WORDS for tok in tokenize(t))
-            ),
-        )
-    )
-    concepts.append(
-        Concept(
-            name="has_money_word",
-            tier=2,
-            description="Contains a money lexicon word or '$'.",
-            fn=lambda texts: _binary_from_texts(
-                texts, lambda t: ("$" in t) or any(tok in MONEY_WORDS for tok in tokenize(t))
-            ),
-        )
-    )
+        def _fn(texts: Sequence[str], _extractor: Callable[[Doc, str], bool] = extractor) -> np.ndarray:
+            docs = _parse_docs(texts)
+            return np.array([np.uint8(_extractor(doc, text)) for doc, text in zip(docs, texts)], dtype=np.uint8)
 
+        concepts.append(Concept(name=name, tier=2, description=description, fn=_fn))
     return concepts
+
+
+def build_linguistic_concept_values(texts: Sequence[str]) -> np.ndarray:
+    """Build the full Tier 2 matrix in one parse pass over the batch."""
+    docs = _parse_docs(texts)
+    values = np.zeros((len(texts), len(ACTIVE_EXTRACTORS)), dtype=np.uint8)
+
+    for row_idx, (doc, text) in enumerate(zip(docs, texts)):
+        for col_idx, (_, _, extractor) in enumerate(ACTIVE_EXTRACTORS):
+            values[row_idx, col_idx] = np.uint8(extractor(doc, text))
+
+    return values

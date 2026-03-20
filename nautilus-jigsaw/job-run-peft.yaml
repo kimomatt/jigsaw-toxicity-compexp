@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mkimotsu-jigsaw-peft-run
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.product: "NVIDIA-GeForce-RTX-3090"
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: mkimotsu-jigsaw-qlora-pvc
+      containers:
+        - name: jigsaw-peft
+          image: pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+          resources:
+            requests:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+            limits:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: hf_token
+            - name: KAGGLE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: kaggle_username
+            - name: KAGGLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: kaggle_key
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euxo pipefail
+              cd /workspace
+
+              pip install -U "numpy<2" tensorboard
+              pip install -U \
+                "transformers==4.44.2" \
+                "huggingface_hub==0.25.2" \
+                "datasets==2.18.0" \
+                "accelerate==0.33.0" \
+                "evaluate==0.4.1" \
+                "iterative-stratification" \
+                "peft==0.13.2" \
+                "bitsandbytes==0.43.3" \
+                "kaggle"
+
+              mkdir -p /workspace/logs
+              echo "[$(date -Iseconds)] Starting PEFT training job"
+              python llama_jigsaw_toxicity_classification_train.py 2>&1 | tee /workspace/logs/peft_run_$(date +%Y%m%d_%H%M%S).log

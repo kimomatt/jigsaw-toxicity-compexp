@@ -7,6 +7,7 @@ Designed for non-interactive execution on Nautilus/cluster jobs.
 import argparse
 import json
 import os
+import time
 import zipfile
 from pathlib import Path
 
@@ -23,11 +24,45 @@ from transformers import (
     BitsAndBytesConfig,
     DataCollatorWithPadding,
     Trainer,
+    TrainerCallback,
     TrainingArguments,
 )
 
 
 TOX_COLS = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+
+
+def _format_duration(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+class EtaLoggerCallback(TrainerCallback):
+    def __init__(self):
+        self.train_start_time = None
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.train_start_time = time.time()
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if self.train_start_time is None or state.global_step <= 0 or not state.max_steps:
+            return
+
+        elapsed = time.time() - self.train_start_time
+        steps_completed = state.global_step
+        steps_remaining = max(0, state.max_steps - steps_completed)
+        seconds_per_step = elapsed / steps_completed
+        eta_seconds = steps_remaining * seconds_per_step
+
+        print(
+            "[ETA] "
+            f"step={steps_completed}/{state.max_steps} "
+            f"elapsed={_format_duration(elapsed)} "
+            f"step_time={seconds_per_step:.2f}s "
+            f"remaining={_format_duration(eta_seconds)}"
+        )
 
 
 def maybe_download_kaggle(competition: str, dataset_dir: Path) -> None:
@@ -263,6 +298,7 @@ def parse_args():
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--sweep-thresholds", action="store_true")
     parser.add_argument("--sweep-per-label", action="store_true")
+    parser.add_argument("--load-best-model-at-end", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
     # Smoke test mode is for fast pipeline validation before long runs.
     parser.add_argument("--smoke-train-size", type=int, default=1000)
@@ -336,6 +372,7 @@ def main():
         eval_steps = max(1, max_steps // 2)
         save_strategy = "steps"
         save_steps = max_steps
+        logging_steps = 10
     else:
         # full training path
         train_ds = tokenized["train"]
@@ -346,6 +383,16 @@ def main():
         eval_steps = None
         save_strategy = "epoch"
         save_steps = None
+        logging_steps = 20
+
+    steps_per_epoch = max(1, (len(train_ds) + args.train_batch_size - 1) // args.train_batch_size)
+    expected_total_steps = max_steps if max_steps > 0 else steps_per_epoch * num_epochs
+    print(f"Train examples: {len(train_ds)}")
+    print(f"Validation examples: {len(val_ds)}")
+    print(f"Per-device train batch size: {args.train_batch_size}")
+    print(f"Expected steps per epoch: {steps_per_epoch}")
+    print(f"Expected total training steps: {expected_total_steps}")
+    print(f"Load best model at end: {args.load_best_model_at_end and (not args.smoke_test)}")
 
     training_args = TrainingArguments(
         output_dir=str(args.output_dir),
@@ -359,11 +406,11 @@ def main():
         eval_steps=eval_steps,
         save_strategy=save_strategy,
         save_steps=save_steps,
-        load_best_model_at_end=(not args.smoke_test),
+        load_best_model_at_end=(args.load_best_model_at_end and (not args.smoke_test)),
         # macro_f1 as best model metric
         metric_for_best_model="eval_macro_f1",
         greater_is_better=True,
-        logging_steps=10 if args.smoke_test else 100,
+        logging_steps=logging_steps,
         report_to="none",
     )
 
@@ -378,6 +425,7 @@ def main():
         # using pos_weight instead of class weight
         pos_weight=pos_weight,
     )
+    trainer.add_callback(EtaLoggerCallback())
 
     train_result = trainer.train()
     eval_metrics = trainer.evaluate()

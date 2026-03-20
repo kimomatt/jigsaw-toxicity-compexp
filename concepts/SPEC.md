@@ -5,7 +5,7 @@ Use this file as the source of truth for concept definitions, standards, and dev
 ## 1) Scope
 - Project: `jigsaw-toxicity-compexp` concept library
 - Owner: Matthew Kimotsuki
-- Last updated: 2026-03-07
+- Last updated: 2026-03-12
 - Version: `concept-spec-v0.1`
 - Goal: Build deterministic, dataset-agnostic binary concept annotations for text examples.
 
@@ -16,51 +16,66 @@ Use this file as the source of truth for concept definitions, standards, and dev
 - Reproducibility: all tunable params recorded in `meta`.
 
 ## 3) Preprocessing Contract
-- Tokenizer: regex `r"[A-Za-z]+(?:'[A-Za-z]+)?"` from `concepts/utils.py`.
-- Lowercasing policy: all tokens lowercased.
-- Punctuation handling: ignored by tokenizer except apostrophes inside matched tokens.
-- Number handling: Tier 2 `has_number` uses regex `r"\b\d+(?:\.\d+)?\b"` on raw text.
-- URL/email handling: Tier 2 uses dedicated raw-text regex checks.
+- Tier 1 tokenizer backend: `spacy.load("en_core_web_sm", disable=["tagger", "parser", "ner"])` from `concepts/tier1_words.py`.
+- Tier 1 tokenization call path: `nlp.make_doc(text)` is used so only the tokenizer runs; no parser / tagger / NER / lemmatizer pass is applied during Tier 1 extraction.
+- Tier 1 lowercasing policy: use spaCy `token.lower_`.
+- Tier 1 whitespace handling: whitespace tokens are dropped via `token.is_space`.
+- Tier 1 punctuation handling: tokenization is delegated to spaCy; vocabulary filtering excludes the explicit minimal skip list and drops pure-punctuation tokens from Tier 1 vocabulary candidates.
+- Tier 2 annotation backend: `spacy.load("en_core_web_sm")` from `concepts/tier2_primitives.py`.
+- Tier 2 batching path: `nlp.pipe(texts, batch_size=128)` is used so docs are parsed once per batch and reused across all Tier 2 concepts.
+- Tier 2 token attributes: concept rules may use token text, lowercase form, dependency labels, POS/tag information, sentence boundaries, and named entities from spaCy annotations.
 - Unicode handling: non-ASCII symbols are mostly excluded by tokenizer; raw-text regex checks still operate on original text.
 
 ## 4) Tier Definitions
 ### Tier 1 (word concepts)
-- Intended purpose:
-- Vocabulary construction method:
-- Fitting split (e.g., train only):
-- Parameters (`k`, `min_df`, `max_df`, stopwords):
+- Intended purpose: Provide transparent lexical presence concepts using a dataset-fitted top-k token vocabulary.
+- Vocabulary construction method: tokenize raw text with spaCy English tokenization, compute document frequency on train texts only, remove a minimal explicit skip list, drop pure-punctuation tokens, and keep the top-k tokens after `min_doc_freq` / `max_doc_frac` filtering.
+- Fitting split (e.g., train only): train split only.
+- Parameters (`k`, `min_df`, `max_df`, stopwords): `top_k`, `min_doc_freq`, `max_doc_frac`, a minimal exclusion list currently `{a, an, of, the, ., ,}`, and a pure-punctuation token filter.
 - Standard source/method used:
+  - spaCy English tokenization via `en_core_web_sm`
+  - frequency-based lexical feature selection in the style of Compexp sentence-level token features
 - Deviations from standard:
+  - current implementation uses raw spaCy tokens rather than a separate model-vocabulary object
+  - current implementation uses document frequency pruning (`min_doc_freq`, `max_doc_frac`) because the emitted concepts are binary word-presence indicators
+  - pure punctuation tokens are excluded from Tier 1 because punctuation-style signals are handled more naturally as Tier 2 surface-form concepts
+  - special bookkeeping tokens such as `UNK` / `PAD` are not part of the raw-text Tier 1 token stream
 
-### Tier 2 (rule primitives)
-- Intended purpose: Provide transparent, portable lexical/surface-form concept features without model dependencies.
-- Standard resources used (regex standards, lexicons, NLP refs):
-  - Regex-style lexical matching and token-set membership (rule-based NLP baseline practice).
-  - No external lexicon package yet; current lexicons are small, manually defined starter sets.
-- Concept list:
-  - `has_first_person`: any token in `{i, me, my, mine, myself, we, us, our, ours, ourselves}`.
-  - `has_second_person`: any token in `{you, your, yours, yourself, yourselves, u, ur}`.
-  - `has_negation`: token in `{not, no, never, none, cannot}` or token suffix `n't`.
-  - `has_modal`: any token in `{can, could, should, would, may, might, must, will, shall}`.
-  - `is_question`: raw text contains `"?"`.
-  - `is_exclamation`: raw text contains `"!"`.
-  - `has_url`: raw text regex match `(?:https?://|www\.)\S+`.
-  - `has_email`: raw text regex match `\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`.
-  - `has_number`: raw text regex match `\b\d+(?:\.\d+)?\b`.
-  - `has_all_caps_word`: raw text regex match `\b[A-Z]{3,}\b`.
-  - `long_sentence`: token count `>= 25`.
-  - `has_negative_word`: any token in `{idiot, stupid, dumb, hate, awful, terrible, trash, loser}`.
-  - `has_positive_word`: any token in `{good, great, love, nice, excellent, amazing, thanks, happy}`.
-  - `has_violence_word`: any token in `{kill, hurt, attack, fight, punch, shoot, stab, destroy}`.
-  - `has_money_word`: token in `{money, cash, dollar, dollars, bucks, price, pay, paid}` or raw text contains `"$"`.
+### Tier 2 (explicit linguistic concepts)
+- Intended purpose: Provide abstract, human-readable linguistic concepts derived from parser/NER/morphosyntactic annotations rather than shallow task-specific word lists.
+- Standard resources used:
+  - spaCy `en_core_web_sm` for tokenization, POS/tag information, sentence segmentation, dependency parsing, and named entity recognition.
+  - Lightweight explicit rules layered over those annotations.
+- Active concept list:
+  - `has_first_person_reference`: any first-person reference token.
+  - `has_second_person_reference`: any second-person reference token.
+  - `has_third_person_reference`: any third-person reference token.
+  - `has_exclamation_clause`: raw text contains `"!"`.
+  - `has_quoted_span`: raw text contains quote characters.
+  - `has_negated_predicate`: dependency-marked negation.
+  - `has_modalized_predicate`: modal auxiliary or modalized predicate structure.
+  - `has_direct_address`: vocative structure or likely direct address pattern.
+- Disabled-but-retained concepts:
+  - `has_person_entity`
+  - `has_org_entity`
+  - `has_gpe_entity`
+  - `has_question_clause`
+  - `has_future_construction`
+  - `has_imperative_clause`
+  - `has_coordination`
+  - `has_copular_predication`
+  - `has_adjectival_predication`
 - Known failure modes:
-  - `has_modal` may overfire in non-modal contexts (e.g., ambiguous token `can`).
-  - `has_all_caps_word` may fire on formatting artifacts, acronyms, or redirects.
-  - `has_number` may fire on IDs or formatting noise unrelated to semantics.
-  - Lexicon concepts can miss paraphrases/slang and can overfire in quoted/meta text.
+  - `has_direct_address` is an approximate structural heuristic, not full discourse analysis.
+  - `has_modalized_predicate` is broad by design and will fire on many non-toxic modal contexts.
+  - Reference concepts are still lexicon-backed rather than purely structural.
 - Deviations from standards:
-  - Uses compact in-code starter lexicons instead of established external lexicon resources.
-  - Uses shallow surface rules instead of parser/model-based detection.
+  - Uses a compact hand-selected abstract taxonomy instead of attempting exhaustive linguistic coverage.
+  - The active Tier 2 inventory was pruned after two random Jigsaw audits to prefer robustness on noisy web text over broader linguistic coverage.
+
+### Tier 2 Baseline (archived rule primitives)
+- Archived implementation file: `concepts/tier2_baseline_primitives.py`
+- Status: retained for comparability and fallback only; no longer the active Tier 2.
 
 ### Tier 3 (cluster concepts)
 - Intended purpose:
@@ -106,6 +121,22 @@ For each deviation from a standard method/resource, document:
   - date: 2026-03-07
   - summary: Initial implementation of Tier 1, Tier 2, Tier 3 scaffolding and Jigsaw demo integration.
   - impact metrics: pending cross-dataset benchmark table.
+  - version: `0.1.1`
+  - date: 2026-03-12
+  - summary: Tier 1 updated to use spaCy `en_core_web_sm` tokenization and top-k token vocabulary without a seeded base lexicon.
+  - impact metrics: pending rerun of Tier 1 demo and integration checks.
+  - version: `0.1.2`
+  - date: 2026-03-12
+  - summary: Tier 1 optimized to cache per-text token sets and exclude pure punctuation tokens from the candidate vocabulary.
+  - impact metrics: `10,000`-row Tier 1 run completed in `2.14s` with shape `(10000, 300)`.
+  - version: `0.2.0`
+  - date: 2026-03-12
+  - summary: Active Tier 2 replaced with a spaCy-based explicit linguistic concept layer; prior shallow rule primitives archived as a baseline.
+  - impact metrics: initial sanity check passed with `17` Tier 2 concepts and correct `uint8` output.
+  - version: `0.2.1`
+  - date: 2026-03-12
+  - summary: Active Tier 2 reduced to an 8-concept robust subset after repeated random-audit pruning; noisier linguistic concepts kept disabled for possible later reintroduction.
+  - impact metrics: two 50-example random audits on Jigsaw web text looked substantially cleaner than the initial 17-concept Tier 2.
 
 ## 8) Open Questions
 - 
