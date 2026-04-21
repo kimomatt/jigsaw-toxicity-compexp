@@ -18,6 +18,11 @@
 - `max_grad_norm = 1.0`
 - `load_best_model_at_end = False`
 
+## Runtime
+- `train_runtime = 25199.8818` seconds
+- approximately `6h 59m 59.9s`
+- `eval_runtime` at epoch 2 = `1233.5029` seconds (`20m 33.5s`)
+
 ## Best Validation Metrics
 
 ### Epoch 1
@@ -60,6 +65,79 @@ These are the metrics written to:
 | `identity_hate` | `0.24193548387096775` | `0.5319148936170213` | `0.3325942350332594` | `141` |
 | `threat` | `0.14383561643835616` | `0.4375` | `0.21649484536082475` | `48` |
 
+## ROC AUC
+
+Recovered from:
+- `/workspace/sequence_classification/predictions/val_predictions.csv`
+- `compexp_toxicity/head_only/recover_roc_auc_from_predictions.py`
+
+Competition-aligned metric:
+- `mean column-wise ROC AUC (macro ROC AUC) = 0.9506788333333333`
+
+Additional overall ROC AUC:
+- `micro ROC AUC = 0.958747`
+
+### Per-Label ROC AUC
+
+| Label | ROC AUC |
+| --- | ---: |
+| `toxic` | `0.939487` |
+| `severe_toxic` | `0.950576` |
+| `obscene` | `0.952893` |
+| `threat` | `0.953350` |
+| `insult` | `0.949603` |
+| `identity_hate` | `0.958164` |
+
+## Threshold Analysis
+
+Confirmed exported prediction threshold:
+- `/workspace/sequence_classification/predictions/thresholds.json`
+- `type = global`
+- `threshold = 0.5`
+
+Per-label threshold sweep recovered from:
+- `/workspace/sequence_classification/predictions/val_predictions.csv`
+- `compexp_toxicity/head_only/optimize_thresholds_from_predictions.py`
+
+### Overall Metrics With Per-Label Tuned Thresholds
+- `micro_f1 = 0.5919019712306872`
+- `macro_f1 = 0.4696405405278708`
+- `samples_f1 = 0.05238846669477074`
+- `subset_accuracy = 0.8768642687053515`
+
+### Best Per-Label Thresholds And Metrics
+
+| Label | Threshold | Precision | Recall | F1 | Support |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `identity_hate` | `0.66` | `0.294118` | `0.425532` | `0.347826` | `141` |
+| `insult` | `0.73` | `0.612352` | `0.591371` | `0.601679` | `788` |
+| `obscene` | `0.65` | `0.615295` | `0.628402` | `0.621780` | `845` |
+| `severe_toxic` | `0.60` | `0.263006` | `0.568750` | `0.359684` | `160` |
+| `threat` | `0.49` | `0.151316` | `0.479167` | `0.230000` | `48` |
+| `toxic` | `0.37` | `0.628965` | `0.687377` | `0.656875` | `1529` |
+
+### Accuracy Context
+
+Validation label-set balance:
+- total examples = `15958`
+- all-negative examples = `14334` (`89.82%`)
+- any-positive examples = `1624` (`10.18%`)
+
+Per-label accuracy versus always-negative baseline:
+
+| Label | Pos % | Neg % | Always-Negative Acc | Acc @ 0.5 | Acc @ Tuned |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `identity_hate` | `0.88%` | `99.12%` | `99.12%` | `98.11%` | `98.59%` |
+| `insult` | `4.94%` | `95.06%` | `95.06%` | `95.31%` | `96.13%` |
+| `obscene` | `5.30%` | `94.70%` | `94.70%` | `95.36%` | `95.95%` |
+| `severe_toxic` | `1.00%` | `99.00%` | `99.00%` | `97.57%` | `97.97%` |
+| `threat` | `0.30%` | `99.70%` | `99.70%` | `99.05%` | `99.04%` |
+| `toxic` | `9.58%` | `90.42%` | `90.42%` | `93.51%` | `93.12%` |
+
+Prevalence-based random baseline context:
+- for a class-prior random predictor, expected per-label `precision`, `recall`, and `F1` are approximately the label positive rate
+- all observed per-label F1 scores are substantially above those prevalence baselines
+
 ## Export Artifacts
 - `overall_metrics.json`
 - `per_label_metrics.csv`
@@ -74,7 +152,10 @@ All were successfully written under:
 - Most useful learning happened by epoch 1; epoch 2 changed loss slightly but left headline F1 metrics nearly flat.
 - The model is strongest on `toxic`, `obscene`, and `insult`.
 - Rare labels remain substantially weaker, especially `threat`.
-- The recovered baseline is strong enough to support probing / explanation work without retraining.
+- Strong per-label ROC AUCs indicate meaningful positive-vs-negative separability for all six labels, even where thresholded accuracy is distorted by class imbalance.
+- Threshold tuning improves metrics modestly, not dramatically; the main limitation is not just the default `0.5` cutoff.
+- `subset_accuracy` is not a reliable headline metric here because nearly `90%` of validation examples are fully negative.
+- The recovered baseline is strong enough to support probing / explanation work without retraining, but it should not be framed as a strong standalone classifier across all rare labels.
 
 ## Operational Notes
 - The export bug was fixed by casting logits to fp32 before NumPy conversion.

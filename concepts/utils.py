@@ -1,9 +1,23 @@
 """Utility helpers for concept annotation."""
 
 from __future__ import annotations
+# allows u to define ur types later on without python complaining about it
 
 import re
 from typing import List, Sequence, Tuple
+# type hinting tools 
+# A Sequence promises only:
+
+# len(x)
+# x[0]
+# for item in x
+
+# A List promises all that plus mutation:
+
+# append()
+# remove()
+# sort()
+# etc.
 
 import numpy as np
 
@@ -20,15 +34,19 @@ def validate_binary_matrix(values: np.ndarray) -> None:
     if values.dtype != np.uint8:
         raise AssertionError(f"Expected dtype=uint8, got {values.dtype}")
     uniq = np.unique(values)
+    # if there is any value in the matrix that is not 0 or 1, raise an error
     if not np.all(np.isin(uniq, [0, 1])):
         raise AssertionError(f"Expected binary values in {{0,1}}, got {uniq}")
 
 
 def coverage_stats(values: np.ndarray, names: Sequence[str]) -> List[Tuple[str, float]]:
     """Return firing rates sorted descending."""
+    # axis=0 means take the man down rows, mean of each column
+    # conditional expresssion - A if condition else B
     rates = values.mean(axis=0) if values.size else np.array([], dtype=float)
     pairs = [(str(n), float(r)) for n, r in zip(names, rates)]
     return sorted(pairs, key=lambda x: x[1], reverse=True)
+    # outputs a list of tuples of concept name and firing rate, sorted by firing rate in descending order
 
 
 def pretty_print_single(text: str, names: Sequence[str], values: np.ndarray) -> None:
@@ -37,4 +55,5 @@ def pretty_print_single(text: str, names: Sequence[str], values: np.ndarray) -> 
     print(text)
     print("\nConcept outputs (row 0):")
     for idx, name in enumerate(names):
+        # print the concept name and the value of that concept for the first row (0 or 1), formatted to be left-aligned in a field of width 20
         print(f"{name:20s} {int(values[0, idx])}")

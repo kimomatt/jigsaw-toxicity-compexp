@@ -44,6 +44,7 @@ def build_concept_set(
 
     concept_names_seen = set()
     deduped = []
+    # don't want duplicate concepts, so we keep track of concept names we've seen and only add a concept to the deduped list if its name hasn't been seen before. 
     for concept in concepts:
         if concept.name in concept_names_seen:
             continue
@@ -52,15 +53,23 @@ def build_concept_set(
     concepts = sorted(deduped, key=lambda c: c.name)
 
     if tier == 1:
+        # getting the words directly from the concept names by splitting on "::" and taking the second part, since the concept names are in the format "has_word::{word}".
         values = build_word_concept_values(texts, [concept.name.split("::", 1)[1] for concept in concepts])
     elif tier == 2:
         values = build_linguistic_concept_values(texts)
     else:
+        # for tier 3, we compute the values by calling each concept's function on the texts to get a binary vector for that concept, and then column-stacking those vectors together to form the full binary matrix of concept values. If there are no concepts, we create an empty binary matrix with the appropriate number of rows (n) and zero columns.
         cols = [concept.fn(texts).astype(np.uint8, copy=False) for concept in concepts]
+        # column stack name is misleading, it actually squishes them together horizontally
         values = np.column_stack(cols) if cols else np.zeros((n, 0), dtype=np.uint8)
+
+    # confirming concept matrix matches package expectations: binary, 2D, correct shape
     validate_binary_matrix(values)
 
+    # using provided meta if it exists, otherwise initialize with empty dictionary
     out_meta: Dict = dict(meta or {})
+
+    # if key is missing, add it with this value
     out_meta.setdefault("tier", tier)
     out_meta.setdefault("concept_count", len(concepts))
 

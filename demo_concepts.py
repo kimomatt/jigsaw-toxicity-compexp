@@ -13,9 +13,11 @@ from concepts.build import build_concept_set
 from concepts.tier1_words import build_tier1_vocabulary
 from concepts.utils import coverage_stats, pretty_print_single, validate_binary_matrix
 
-
+# ds_split is a list of dictionaries, where each dictionary represents a single data example with keys like "id" and "text". The function dataset_to_examples takes this list of dictionaries and extracts the "id" and "text" values into two separate lists, which are then returned as a tuple. This allows us to convert from a more general dataset format (list of dicts) into the specific aligned format (ids and texts) that our concept building functions expect.
+# example ds_split input: [{"id": "s0", "text": "I love this product."}, {"id": "s1", "text": "You are awful and I hate this."}, {"id": "s2", "text": "Email me at example@email.com"}]
 def dataset_to_examples(ds_split: Sequence[Dict[str, str]]) -> Tuple[List[str], List[str]]:
     """Phase 3 stub adapter: convert list-of-dicts into aligned ids and texts."""
+    # converts general dataset records into exact format build_concept_set expects, which is a list of texts and an optional list of text ids.
     ids: List[str] = []
     texts: List[str] = []
     for i, item in enumerate(ds_split):
@@ -38,9 +40,11 @@ def load_jigsaw_examples_from_csv(
     texts: List[str] = []
     with csv_path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
+        # going thru each row in the csv file
         for row in reader:
             if limit is not None and len(texts) >= limit:
                 break
+            # we expect the csv to have a column named "comment_text" which contains the text of the comment. if the "comment_text" column is missing, text defaults to ""
             text = row.get("comment_text", "")
             if text is None:
                 continue
@@ -49,6 +53,7 @@ def load_jigsaw_examples_from_csv(
                 continue
             row_id = row.get("id")
             if row_id is None or str(row_id).strip() == "":
+                # generating a fallback id if the "id" column is missing or empty, using the current number of texts loaded to create a unique id like "row_0", "row_1", etc. This ensures that every example has an id, even if the original CSV doesn't provide one.
                 row_id = f"row_{len(texts)}"
             ids.append(str(row_id))
             texts.append(text)
@@ -67,6 +72,7 @@ def print_random_audit(
     seed: int = 42,
 ) -> None:
     """Print a small random manual-audit sample with fired concepts only."""
+    # print a random sample of rows and which concepts fired 
     if len(texts) == 0:
         print("No examples available for audit.")
         return
@@ -75,10 +81,17 @@ def print_random_audit(
 
     count = min(n, len(texts))
     rng = np.random.default_rng(seed)
+
+    # sample_idx is a 1D array of random indices into the texts/ids/values arrays, with length equal to the smaller of n and the total number of texts. This allows us to randomly select a subset of examples for manual auditing, without replacement (i.e., we won't select the same example multiple times).
+    # size is how many random indices we want to generate, which is determined by the count variable. replace=False means that once an index is selected, it cannot be selected again, ensuring that we get unique examples in our audit sample, len(texts) is the total number of examples available, so we won't try to sample more examples than we have.
     sample_idx = rng.choice(len(texts), size=count, replace=False)
 
     print(f"\nManual random audit ({count} examples, seed={seed}):")
+    # indexing starts at 1
     for i, row_idx in enumerate(sample_idx, start=1):
+        # values.shape[1] → number of columns (features)
+        # values[row_idx, j] → value of feature j for that row
+        # names[j] → name of feature j
         fired = [names[j] for j in range(values.shape[1]) if int(values[row_idx, j]) == 1]
         text_preview = texts[row_idx].replace("\n", " ").strip()
         if len(text_preview) > 220:
@@ -86,6 +99,7 @@ def print_random_audit(
 
         print(f"\n[{i}] id={ids[row_idx]}")
         print(f"text: {text_preview}")
+        # if the fired list is empty, we print "(none)" to indicate that no concepts fired for that example. Otherwise, we join the names of the fired concepts with commas and print them.
         print("fired:", ", ".join(fired) if fired else "(none)")
 
 
@@ -107,6 +121,7 @@ def run_phase_1() -> None:
         text_ids=["ex0"],
         meta={"demo_phase": 1},
     )
+    # for tier 3, we create a single cluster assignment of 0 for our one example, which should result in a single concept "cluster::0" that fires for that example.
     tier3 = build_concept_set(
         texts=[sentence],
         tier=3,
@@ -172,6 +187,8 @@ def run_phase_2() -> None:
         print(f"{name:20s} {rate:.3f}")
 
     print("\nTier 1 batch matrix shape:", tier1_batch.values.shape)
+
+    # double checking that text_ids we passed in are correctly aligned in the ConceptSet output (no reason they wouldn't be, but just to be sure our build_concept_set function is handling the text_ids correctly and preserving the alignment between the input ids and the output ConceptSet's text_ids).
     print("Tier 1 text_ids aligned:", tier1_batch.text_ids == ids)
 
 
@@ -249,6 +266,7 @@ def run_phase_5_ramp() -> None:
             print(f"Skipping ramp {label}:", exc)
             return
 
+        # start timer
         t0 = time.perf_counter()
         conceptset = build_concept_set(
             texts=texts,
@@ -256,9 +274,11 @@ def run_phase_5_ramp() -> None:
             text_ids=ids,
             meta={"demo_phase": 5, "dataset": "jigsaw_train_csv", "ramp": label},
         )
+        # get elapsed seconds
         dt = time.perf_counter() - t0
 
         validate_binary_matrix(conceptset.values)
+        # :>4s means right align string in width 4, :6d means integer width 6, :.2f means float with 2 decimal places
         print(
             f"{label:>4s}: rows={len(texts):6d}, shape={conceptset.values.shape}, "
             f"ids_aligned={conceptset.text_ids == ids}, seconds={dt:.2f}"
@@ -321,7 +341,7 @@ def main() -> None:
     run_phase_2()
     run_phase_3_stub()
     run_phase_4_real_jigsaw()
-    run_phase_5_ramp()
+    # run_phase_5_ramp()
     run_phase_6_tier1_vocab()
 
 

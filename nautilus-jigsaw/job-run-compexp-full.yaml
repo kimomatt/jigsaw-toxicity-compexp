@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mkimotsu-jigsaw-compexp-full
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        nvidia.com/gpu.product: "NVIDIA-GeForce-RTX-3090"
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: mkimotsu-jigsaw-qlora-pvc
+      containers:
+        - name: jigsaw-compexp-full
+          image: pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+          resources:
+            requests:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+            limits:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: hf_token
+            - name: KAGGLE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: kaggle_username
+            - name: KAGGLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mkimotsu-secrets
+                  key: kaggle_key
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euxo pipefail
+              cd /workspace
+
+              pip install -U "numpy<2" tensorboard
+              pip install -U \
+                "transformers==4.44.2" \
+                "huggingface_hub==0.25.2" \
+                "datasets==2.18.0" \
+                "accelerate==0.33.0" \
+                "evaluate==0.4.1" \
+                "pandas" \
+                "iterative-stratification"
+
+              mkdir -p /workspace/logs
+
+              python /workspace/extract_last_token_activations.py \
+                --model-path /workspace/sequence_classification/saved_model \
+                --output-dir /workspace/compexp_outputs_full \
+                --batch-size 4 2>&1 | tee /workspace/logs/compexp_full_$(date +%Y%m%d_%H%M%S).log
