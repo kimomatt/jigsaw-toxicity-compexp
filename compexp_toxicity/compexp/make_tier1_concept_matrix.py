@@ -68,7 +68,7 @@ def load_jigsaw_examples_from_csv(
 
 def main() -> None:
 
-    run_output_dir = Path("compexp_outputs_full")
+    run_output_dir = Path("/workspace/compexp_outputs_full")
     output_dir = run_output_dir / "conceptset_tier1"
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
