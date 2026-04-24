@@ -63,7 +63,9 @@ def main():
     # also wanna print like the top 10 concepts by iou for each neuron, and then we can use those as starting points for our beam search to find compositional explanations that have high iou with the target neuron activations, and we can save those top correlated concepts and their ious as part of our results for analysis and visualization in the sentence report
 
 
-    for neuron in settings.NEURONS:
+    # for neuron in settings.NEURONS:
+
+    for neuron in range(activations.shape[1]):
         
         concept_iou_map = {}
         print(f"Analyzing neuron {neuron}")
@@ -77,10 +79,10 @@ def main():
             # save the iou for this concept and neuron
             concept_iou_map[concept_idx] = iou_score
 
-        # sort concepts by iou and print top 10
+        # sort concepts by iou and print top concept for this neuron
         sorted_concepts = sorted(concept_iou_map.items(), key=lambda x: x[1], reverse=True)
-        print(f"  Top 10 concepts for neuron {neuron}:")
-        for i in range(min(10, len(sorted_concepts))):
+        print(f"  Top concept for neuron {neuron}:")
+        for i in range(min(1, len(sorted_concepts))):
             concept_idx, score = sorted_concepts[i]
             concept_name = tier1_concept_names[concept_idx].split("::")[1] if "::" in tier1_concept_names[concept_idx] else tier1_concept_names[concept_idx]
             print(f"    {concept_name} ({concept_idx}): {score}")
