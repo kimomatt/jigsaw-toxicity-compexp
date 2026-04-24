@@ -81,9 +81,9 @@ def main():
         sorted_concepts = sorted(concept_iou_map.items(), key=lambda x: x[1], reverse=True)
         print(f"  Top 10 concepts for neuron {neuron}:")
         for i in range(min(10, len(sorted_concepts))):
-            concept_idx, iou = sorted_concepts[i]
+            concept_idx, score = sorted_concepts[i]
             concept_name = tier1_concept_names[concept_idx].split("::")[1] if "::" in tier1_concept_names[concept_idx] else tier1_concept_names[concept_idx]
-            print(f"    {concept_name} ({concept_idx}): {iou}")
+            print(f"    {concept_name} ({concept_idx}): {score}")
 
 if __name__ == "__main__":
     main()
