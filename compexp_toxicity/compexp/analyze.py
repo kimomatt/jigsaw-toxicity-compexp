@@ -20,11 +20,25 @@ def quantile_features(feats):
     return feats > quantiles[np.newaxis]
 
 def iou(a, b):
+    # intersection is the number of positions where both a and b are 1, and union is the number of positions where either a or b is 1. The IoU is then computed as the intersection divided by the union, which gives us a measure of how well the concept represented by vector a overlaps with the activations represented by vector b. A higher IoU indicates a stronger correlation between the concept and the neuron activations.
     intersection = (a & b).sum()
     union = (a | b).sum()
 
     # adding a tiny value to the denominator to prevent division by zero in case both a and b are all zeros (i.e., no activations), which would result in an undefined IoU. This way, if both a and b are all zeros, the IoU will be defined as 0 instead of causing an error.
     return intersection / (union + np.finfo(np.float32).tiny)
+
+def lift(a, b):
+    # lift is computed as the ratio of the joint probability of a and b being 1 (i.e., both the concept and the neuron are active) to the product of their individual probabilities of being 1. This gives us a measure of how much more likely it is for the concept and the neuron to be active together than we would expect if they were independent. A lift value greater than 1 indicates a positive association between the concept and the neuron, while a value less than 1 indicates a negative association.
+    p_a = np.mean(a)
+    p_b = np.mean(b)
+    p_ab = np.mean(a & b)
+
+    # adding a tiny value to the denominator to prevent division by zero in case either p_a or p_b is zero (i.e., if either the concept or the neuron is never active), which would result in an undefined lift. This way, if either p_a or p_b is zero, the lift will be defined as 0 instead of causing an error.
+    return p_ab / (p_a * p_b + np.finfo(np.float32).tiny)
+
+def support(a, b):
+    # support is simply the joint probability of a and b being 1 (i.e., both the concept and the neuron are active), which gives us a measure of how frequently the concept and the neuron are active together in the dataset. A higher support indicates that the concept and the neuron co-occur more frequently, which can be an important factor to consider alongside measures like IoU and lift when evaluating potential explanations.
+    return np.mean(a & b)
 
 # this assumes that the extract last token activations script as well as the make tier1 concept matrix script (after) have already been run, since it needs the extracted features and the tier1 concept matrix to do the mask search and then visualize the features in the sentence report
 
@@ -89,14 +103,14 @@ def main():
             concept_idx, score = sorted_concepts[i]
             concept_name = tier1_concept_names[concept_idx].split("::")[1] if "::" in tier1_concept_names[concept_idx] else tier1_concept_names[concept_idx]
             # print(f"    {concept_name} ({concept_idx}): {score}")
-            top_concepts[(neuron, concept_name)] = score
+            top_concepts[(neuron, concept_name, concept_idx)] = score
 
     # print 100 top concepts overall by iou
     sorted_top_concepts = sorted(top_concepts.items(), key=lambda x: x[1], reverse=True)
     print("Top concepts overall by IoU:")
     for i in range(min(100, len(sorted_top_concepts))):
-        (neuron, concept_name), score = sorted_top_concepts[i]
-        print(f"  Neuron {neuron}, Concept: {concept_name}, IoU: {score}")
+        (neuron, concept_name, concept_idx), score = sorted_top_concepts[i]
+        print(f"  Neuron {neuron}, Concept: {concept_name}, IoU: {score}, lift: {lift(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}, support: {support(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}")
 
 if __name__ == "__main__":
     main()
