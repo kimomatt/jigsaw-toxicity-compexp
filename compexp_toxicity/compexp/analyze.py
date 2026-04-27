@@ -50,20 +50,50 @@ def extract_concept_indices(formula):
     else:
         raise ValueError(f"Unknown formula type: {formula[0]}")
     
+def _gather_same_kind(kind, formula):
+    if formula[0] != kind:
+        return [formula]
+    else:
+        return _gather_same_kind(kind, formula[1]) + _gather_same_kind(kind, formula[2])
+
+def _rebuild_binary(kind, items):
+    out = items[0]
+    for item in items[1:]:
+        out = (kind, out, item)
+    return out
+
+    
 def canonicalize(formula):
     kind = formula[0]
 
     if kind == "leaf":
         return formula
+    
+    # accounts for double negation
     if kind == "not":
-        return ("not", canonicalize(formula[1]))
+        child = canonicalize(formula[1])
+        if child[0] == "not":
+            return child[1]
+        return ("not", child)
+    
     if kind in {"and", "or"}:
-        left = canonicalize(formula[1])
-        right = canonicalize(formula[2])
-        # this comparison works because the leaf nodes are just integers (concept indices), and the internal nodes are tuples where the first element is the operator and the rest are the sub-formulas, so we can compare them directly to get a consistent ordering for commutative operations like AND and OR. By enforcing this canonical ordering, we can avoid generating duplicate formulas that are logically equivalent but have different structures (e.g., A AND B vs B AND A).
-        if right < left:
-            left, right = right, left
-        return (kind, left, right)
+        items = _gather_same_kind(kind, formula)
+        items = [canonicalize(item) for item in items]
+        items.sort()
+
+        # deduping
+        deduped = []
+        for item in items:
+            if not deduped or item != deduped[-1]:
+                deduped.append(item)
+        items = deduped
+
+        if len(items) == 1:
+            return items[0]
+        
+        return _rebuild_binary(kind, items)
+
+
     raise ValueError(f"Unknown formula type: {kind}")
 
 def pretty_print_formula(formula, concept_names):
