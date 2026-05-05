@@ -22,6 +22,8 @@ def build_concept_set(
     text_ids: Optional[Sequence[str]] = None,
 ) -> ConceptSet:
     """Build a ConceptSet for the given tier."""
+    if texts is None:
+        raise ValueError("texts must be provided")
     n = len(texts)
     if text_ids is not None and len(text_ids) != n:
         raise ValueError("text_ids must align with texts")
