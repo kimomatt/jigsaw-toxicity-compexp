@@ -1,6 +1,8 @@
 
 import os
 import numpy as np
+from sklearn.cluster import KMeans
+
 
 from compexp_toxicity.compexp import settings
 
@@ -18,6 +20,102 @@ def quantile_features(feats):
     quantiles = get_quantiles(feats, settings.ALPHA)
     # use np.newaxis to add a new axis to the quantiles array so that it can be broadcasted correctly when comparing to the feats matrix. This way, we are comparing each activation in feats to the corresponding quantile threshold for that feature across all examples.
     return feats > quantiles[np.newaxis]
+
+# want to build a function to cluster the activations into intervals, return intervals
+# code in Mattia's repo:
+# def build_ranges_from_clusters(
+#         activations: torch.Tensor, clusters: List[int],
+#         num_clusters: int) -> List[tuple]:
+#     """Build activation ranges from clusters.
+
+#     Args:
+#         activations (torch.Tensor): Activations of the unit.
+#         clusters (List[int]): Clusters indexes of the activations.
+#         num_clusters (int): Number of clusters.
+
+#     Returns:
+#         activation_ranges (List[tuple]): Activation ranges for each cluster.
+#     """
+
+#     activations_ranges = []
+#     for label in range(num_clusters):
+#         cluster_activations = activations[clusters == label]
+#         lower_bound = torch.min(cluster_activations)
+#         upper_bound = torch.max(cluster_activations)
+#         activations_ranges.append((lower_bound.item(), upper_bound.item()))
+#     return activations_ranges
+# def compute_activation_ranges(
+#         activations: torch.Tensor, num_clusters: int) -> List[Tuple]:
+#     """Compute activation ranges for each unit.
+
+#     Args:
+#         activations (torch.Tensor): Activations of the unit.
+#         num_clusters (int): Number of clusters.
+#         algorithm (str): Algorithm to use for clustering.
+
+#     Returns:
+#         activation_ranges (List[tuple]): Activation ranges for each unit.
+#     """
+#     if num_clusters == 1:
+#         # Case vanilla compositional and netdissect range
+#         # Avoid zero is set to false like in the compositional paper
+#         threshold = quantile_threshold(
+#             activations, quantile=C.NETDISSECT_QUANTILE, avoid_zero=False
+#         )
+#         activation_ranges = [(threshold, torch.tensor(float("inf")))]
+#     else:
+#         activations = activations.reshape(-1, 1)
+#         # Remove zeros from activations if there is a relu activation
+#         if torch.all(activations >= 0):
+#             activations = activations[activations > 0]
+#             activations = activations.reshape(-1, 1)
+#         # Compute activation ranges
+#         clusters = scikit_cluster.KMeans(
+#             n_clusters=num_clusters, random_state=0
+#             ).fit(activations)
+#         activation_ranges = build_ranges_from_clusters(
+#             activations, clusters.labels_, num_clusters)
+#     return activation_ranges
+def compute_activation_intervals(neuron_values, num_clusters):
+    # if num clusters is 1, then maybe have it default to activation thresholding based on quantiles, and then if num clusters is greater than 1, we can do k-means clustering on the activations to find clusters of activation values, and then we can compute the min and max activation value for each cluster to define the intervals. This way, we can capture more complex patterns in the activations beyond just a single threshold, which can help us identify more nuanced explanations for the neuron activations.
+    if num_clusters <= 1:
+        # shouldn't call this function with num_clusters = 1, raise an error if that happens since we want to make sure we're not accidentally using activation thresholding when we meant to be doing clustering, and vice versa. If num_clusters is 1, that means we're just doing activation thresholding based on quantiles, so we shouldn't be calling this function at all since it's meant for computing intervals based on clustering.
+        raise ValueError("num_clusters must be greater than 1 for compute_activation_intervals")
+    
+    if len(neuron_values) == 0:
+        raise ValueError("No activation values provided to compute_activation_intervals")
+
+    # if num clusters is greater than number of inputs we should set num clusters to number of inputs, add logging
+    if num_clusters > len(np.unique(neuron_values)):
+        num_clusters = len(np.unique(neuron_values))
+        print(f"Warning: num_clusters is greater than number of unique inputs, setting num_clusters to {num_clusters}")
+    
+    values = np.asarray(neuron_values).reshape(-1, 1)  # reshape to 2D array for k-means, -1 tells numpy to figure out this dimension (number of rows) based on the number of columns which we set
+
+    clusters = KMeans(n_clusters=num_clusters, random_state=0).fit(values)
+    labels = clusters.labels_
+
+    activation_ranges = []
+    for cluster_id in range(num_clusters):
+        cluster_values = values[labels == cluster_id]
+        activation_ranges.append((float(cluster_values.min()), float(cluster_values.max())))
+
+    activation_ranges.sort(key=lambda r: r[0])
+    return activation_ranges
+
+
+# then function to binarize based on whether the activation falls into the chosen interval, should be very similar to quantile features, takes in one chosen interval, will loop over intervals and call this function w each interval
+def binarize_activations(activation_values, interval):
+    # make sure that valid interval and set of activation values are provided, then convert the activation values to a numpy array and return a binary vector indicating whether each activation value falls within the specified interval (inclusive). This allows us to create binary features based on the activation intervals we computed, which can be useful for analyzing the relationship between neuron activations and concepts in our compositional explanations.
+    if interval is None or len(interval) != 2 or interval[0] > interval[1]:
+        raise ValueError("Invalid interval provided to binarize_activations")
+    if len(activation_values) == 0:
+        raise ValueError("No activation values provided to binarize_activations")
+
+    lower, upper = interval
+    values = np.asarray(activation_values)
+    return (values >= lower) & (values <= upper)
+
 
 def iou(a, b):
     # intersection is the number of positions where both a and b are 1, and union is the number of positions where either a or b is 1. The IoU is then computed as the intersection divided by the union, which gives us a measure of how well the concept represented by vector a overlaps with the activations represented by vector b. A higher IoU indicates a stronger correlation between the concept and the neuron activations.
@@ -132,6 +230,7 @@ def main():
 
     # load up tier 1 concept matrix
     tier1_concept_matrix = np.load("/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1.npy")
+    tier1_concept_matrix = tier1_concept_matrix.astype(bool)
 
     with open("/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1_names.txt", "r", encoding="utf-8") as f:
       tier1_concept_names = [line.strip() for line in f]
@@ -139,8 +238,8 @@ def main():
 
     # os.makedirs(settings.RESULT, exist_ok=True)
 
-    print("Computing quantiles")
-    acts = quantile_features(activations)
+    # print("Computing quantiles")
+    # acts = quantile_features(activations)
 
     # at this point we can start doing the search for each chosen neuron, and then we can save the results and also visualize them in the sentence report
 
@@ -161,106 +260,114 @@ def main():
         # }
         score_cache = {}
 
-        for concept_idx in range(tier1_concept_matrix.shape[1]):
-            concept_vector = tier1_concept_matrix[:, concept_idx]
-            neuron_vector = acts[:, neuron]
-            iou_score = iou(concept_vector, neuron_vector)
-            concept_name = tier1_concept_names[concept_idx].split("::")[1] if "::" in tier1_concept_names[concept_idx] else tier1_concept_names[concept_idx]
-            # print(f"  Concept: {concept_name} ({concept_idx}), IoU: {iou_score}, lift: {lift(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}, support: {support(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}")
-            score_cache[("leaf", concept_idx)] = {
-                "formula": ("leaf", concept_idx),
-                "iou": iou_score,
-                "lift": lift(tier1_concept_matrix[:, concept_idx], acts[:, neuron]),
-                "support": support(tier1_concept_matrix[:, concept_idx], acts[:, neuron]),
-                "mask": concept_vector,
-                "complexity": 1,  # complexity of 1 for individual concepts
-            }
-        
-        # sort concepts by iou and print top concept for this neuron
-        sorted_concepts = sorted(score_cache.values(), key=lambda x: x["iou"], reverse=True)
-        # trim to beam size
-        beam = sorted_concepts[:settings.BEAM_SIZE]
-        # beam now looks like [{'formula': ('leaf', concept_idx), 'iou': iou_score, 'lift': lift_score, 'support': support_score, 'mask': concept_vector, 'complexity': 1}, ...] for the top concepts based on iou with the target neuron activations, and we can use this as a starting point for our beam search to find compositional explanations that have high iou with the target neuron activations. We can save these top concepts and their scores as part of our results for analysis and visualization in the sentence report.
+        intervals = compute_activation_intervals(activations[:, neuron], settings.NUM_CLUSTERS)
+        for interval in intervals:
+            neuron_vector = binarize_activations(activations[:, neuron], interval)
 
-        for formula_len in range(2, settings.MAX_FORMULA_LENGTH + 1):
-          new_beam = beam.copy()
+            # reset score_cache and beam for each interval
+            score_cache = {}
+            beam = []
 
-          # begin beam search for compositional explanations starting from these top concepts, and save results for analysis and visualization in the sentence report
-          for scores in beam:
-              formula = scores["formula"]
-              used_concept_indices = extract_concept_indices(formula)
 
-              # go through every other concept and combine it with the starting concept using AND, OR, NOT to see if we can get a higher iou with the target neuron activations, and keep track of the top combinations in our beam. We would also want to consider the complexity of the explanations (e.g., how many concepts are combined) and potentially apply a penalty for more complex explanations to encourage simpler ones.
+            for concept_idx in range(tier1_concept_matrix.shape[1]):
+                concept_vector = tier1_concept_matrix[:, concept_idx]
+                iou_score = iou(concept_vector, neuron_vector)
+                concept_name = tier1_concept_names[concept_idx].split("::")[1] if "::" in tier1_concept_names[concept_idx] else tier1_concept_names[concept_idx]
+                # print(f"  Concept: {concept_name} ({concept_idx}), IoU: {iou_score}, lift: {lift(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}, support: {support(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}")
+                score_cache[("leaf", concept_idx)] = {
+                    "formula": ("leaf", concept_idx),
+                    "iou": iou_score,
+                    "lift": lift(tier1_concept_matrix[:, concept_idx], neuron_vector),
+                    "support": support(tier1_concept_matrix[:, concept_idx], neuron_vector),
+                    "mask": concept_vector,
+                    "complexity": 1,  # complexity of 1 for individual concepts
+                }
+            
+            # sort concepts by iou and print top concept for this neuron
+            sorted_concepts = sorted(score_cache.values(), key=lambda x: x["iou"], reverse=True)
+            # trim to beam size
+            beam = sorted_concepts[:settings.BEAM_SIZE]
+            # beam now looks like [{'formula': ('leaf', concept_idx), 'iou': iou_score, 'lift': lift_score, 'support': support_score, 'mask': concept_vector, 'complexity': 1}, ...] for the top concepts based on iou with the target neuron activations, and we can use this as a starting point for our beam search to find compositional explanations that have high iou with the target neuron activations. We can save these top concepts and their scores as part of our results for analysis and visualization in the sentence report.
 
-              # want canonical ordering to avoid duplicates
-              for cand_concept_idx in range(tier1_concept_matrix.shape[1]):
-                  if cand_concept_idx in used_concept_indices:
-                      continue
-                  cand_concept_name = tier1_concept_names[cand_concept_idx].split("::")[1] if "::" in tier1_concept_names[cand_concept_idx] else tier1_concept_names[cand_concept_idx]
-                  # try AND combination
-                  and_vector = scores["mask"] & tier1_concept_matrix[:, cand_concept_idx]
-                  and_iou_score = iou(and_vector, acts[:, neuron])
-                  # print(f"    AND with concept: {cand_concept_name} ({cand_concept_idx}), IoU: {and_iou_score}, lift: {lift(and_vector, acts[:, neuron])}, support: {support(and_vector, acts[:, neuron])}")
+            for formula_len in range(2, settings.MAX_FORMULA_LENGTH + 1):
+              new_beam = beam.copy()
 
-                  # then will add to beam regardless, will trim beam to top k later, and we will also want to keep track of the complexity of the explanation (e.g., how many concepts are combined) and potentially apply a penalty for more complex explanations to encourage simpler ones. We would also want to try OR and NOT combinations in a similar way, and keep track of the top combinations in our beam based on their iou scores with the target neuron activations, while also considering their complexity.
-                  canonical_and_formula = canonicalize(("and", scores["formula"], ("leaf", cand_concept_idx)))
-                  if canonical_and_formula not in score_cache:
-                    new_beam.append({'formula': canonical_and_formula, 'iou': and_iou_score, 'lift': lift(and_vector, acts[:, neuron]), 'support': support(and_vector, acts[:, neuron]), 'mask': and_vector, 'complexity': formula_len})
-                    score_cache[canonical_and_formula] = {
-                        "formula": canonical_and_formula,
-                        "iou": and_iou_score,
-                        "lift": lift(and_vector, acts[:, neuron]),
-                        "support": support(and_vector, acts[:, neuron]),
-                        "mask": and_vector,
-                        "complexity": formula_len,
-                    }
+              # begin beam search for compositional explanations starting from these top concepts, and save results for analysis and visualization in the sentence report
+              for scores in beam:
+                  formula = scores["formula"]
+                  used_concept_indices = extract_concept_indices(formula)
 
-                  # try OR combination
-                  or_vector = scores["mask"] | tier1_concept_matrix[:, cand_concept_idx]
-                  or_iou_score = iou(or_vector, acts[:, neuron])
-                  # print(f"    OR with concept: {cand_concept_name} ({cand_concept_idx}), IoU: {or_iou_score}, lift: {lift(or_vector, acts[:, neuron])}, support: {support(or_vector, acts[:, neuron])}")
-                  canonical_or_formula = canonicalize(("or", scores["formula"], ("leaf", cand_concept_idx)))
-                  if canonical_or_formula not in score_cache:
-                    new_beam.append({'formula': canonical_or_formula, 'iou': or_iou_score, 'lift': lift(or_vector, acts[:, neuron]), 'support': support(or_vector, acts[:, neuron]), 'mask': or_vector, 'complexity': formula_len})  # complexity of 2 for combining 2 concepts
-                    score_cache[canonical_or_formula] = {
-                        "formula": canonical_or_formula,
-                        "iou": or_iou_score,
-                        "lift": lift(or_vector, acts[:, neuron]),
-                        "support": support(or_vector, acts[:, neuron]),
-                        "mask": or_vector,
-                        "complexity": formula_len,
-                    }
+                  # go through every other concept and combine it with the starting concept using AND, OR, NOT to see if we can get a higher iou with the target neuron activations, and keep track of the top combinations in our beam. We would also want to consider the complexity of the explanations (e.g., how many concepts are combined) and potentially apply a penalty for more complex explanations to encourage simpler ones.
 
-                  # try NOT combination (negating the candidate concept and combining with AND)
-                  not_vector = scores["mask"] & (~tier1_concept_matrix[:, cand_concept_idx])
-                  not_iou_score = iou(not_vector, acts[:, neuron])
-                  # print(f"    NOT with concept: {cand_concept_name} ({cand_concept_idx}), IoU: {not_iou_score}, lift: {lift(not_vector, acts[:, neuron])}, support: {support(not_vector, acts[:, neuron])}")
-                  canonical_not_formula = canonicalize(("and", scores["formula"], ("not", ("leaf", cand_concept_idx))))
-                  if canonical_not_formula not in score_cache:
-                    new_beam.append({'formula': canonical_not_formula, 'iou': not_iou_score, 'lift': lift(not_vector, acts[:, neuron]), 'support': support(not_vector, acts[:, neuron]), 'mask': not_vector, 'complexity': formula_len})  # complexity of 2 for combining 2 concepts
-                    score_cache[canonical_not_formula] = {
-                        "formula": canonical_not_formula,
-                        "iou": not_iou_score,
-                        "lift": lift(not_vector, acts[:, neuron]),
-                        "support": support(not_vector, acts[:, neuron]),
-                        "mask": not_vector,
-                        "complexity": formula_len,
-                    }
+                  # want canonical ordering to avoid duplicates
+                  for cand_concept_idx in range(tier1_concept_matrix.shape[1]):
+                      if cand_concept_idx in used_concept_indices:
+                          continue
+                      cand_concept_name = tier1_concept_names[cand_concept_idx].split("::")[1] if "::" in tier1_concept_names[cand_concept_idx] else tier1_concept_names[cand_concept_idx]
+                      # try AND combination
+                      and_vector = scores["mask"] & tier1_concept_matrix[:, cand_concept_idx]
+                      and_iou_score = iou(and_vector, neuron_vector)
+                      # print(f"    AND with concept: {cand_concept_name} ({cand_concept_idx}), IoU: {and_iou_score}, lift: {lift(and_vector, neuron_vector)}, support: {support(and_vector, neuron_vector)}")
 
-          # trim the beam to the top k combinations based on iou score, while also considering complexity (e.g., we could apply a penalty to the iou score based on the complexity of the explanation to encourage simpler explanations)
-          new_beam.sort(key=lambda x: x['iou'] * (settings.COMPLEXITY_PENALTY ** x['complexity']), reverse=True)  # sort by iou score with a penalty for complexity
-          beam = new_beam[:settings.BEAM_SIZE]
-        
-        # after finishing the beam search, we would have a set of top compositional explanations for this neuron based on their iou scores with the target neuron activations, and we can save these explanations and their scores as part of our results for analysis and visualization in the sentence report. We can also analyze the final explanations to see which concepts are most commonly involved in high-iou explanations for this neuron, which can give us insights into what this neuron is responding to.
-        print(f"Top explanations for neuron {neuron}:")
-        for explanation in beam:
-            formula = explanation['formula']
-            iou_score = explanation['iou']
-            lift_score = explanation['lift']
-            support_score = explanation['support']
-            complexity = explanation['complexity']
-            print(f"  Explanation: {pretty_print_formula(formula, tier1_concept_names)}, IoU: {iou_score}, Lift: {lift_score}, Support: {support_score}, Complexity: {complexity}")
-            # want to display concept names instead of indices in the explanation for better interpretability, so we can write a helper function to convert the formula with concept indices into a formula with concept names by looking up the concept names from the tier1_concept_names list using the indices. This way, we can have more interpretable explanations that indicate which concepts are involved in the explanation for the neuron activations.
+                      # then will add to beam regardless, will trim beam to top k later, and we will also want to keep track of the complexity of the explanation (e.g., how many concepts are combined) and potentially apply a penalty for more complex explanations to encourage simpler ones. We would also want to try OR and NOT combinations in a similar way, and keep track of the top combinations in our beam based on their iou scores with the target neuron activations, while also considering their complexity.
+                      canonical_and_formula = canonicalize(("and", scores["formula"], ("leaf", cand_concept_idx)))
+                      if canonical_and_formula not in score_cache:
+                        new_beam.append({'formula': canonical_and_formula, 'iou': and_iou_score, 'lift': lift(and_vector, neuron_vector), 'support': support(and_vector, neuron_vector), 'mask': and_vector, 'complexity': formula_len})
+                        score_cache[canonical_and_formula] = {
+                            "formula": canonical_and_formula,
+                            "iou": and_iou_score,
+                            "lift": lift(and_vector, neuron_vector),
+                            "support": support(and_vector, neuron_vector),
+                            "mask": and_vector,
+                            "complexity": formula_len,
+                        }
+
+                      # try OR combination
+                      or_vector = scores["mask"] | tier1_concept_matrix[:, cand_concept_idx]
+                      or_iou_score = iou(or_vector, neuron_vector)
+                      # print(f"    OR with concept: {cand_concept_name} ({cand_concept_idx}), IoU: {or_iou_score}, lift: {lift(or_vector, neuron_vector)}, support: {support(or_vector, neuron_vector)}")
+                      canonical_or_formula = canonicalize(("or", scores["formula"], ("leaf", cand_concept_idx)))
+                      if canonical_or_formula not in score_cache:
+                        new_beam.append({'formula': canonical_or_formula, 'iou': or_iou_score, 'lift': lift(or_vector, neuron_vector), 'support': support(or_vector, neuron_vector), 'mask': or_vector, 'complexity': formula_len})  # complexity of 2 for combining 2 concepts
+                        score_cache[canonical_or_formula] = {
+                            "formula": canonical_or_formula,
+                            "iou": or_iou_score,
+                            "lift": lift(or_vector, neuron_vector),
+                            "support": support(or_vector, neuron_vector),
+                            "mask": or_vector,
+                            "complexity": formula_len,
+                        }
+
+                      # try NOT combination (negating the candidate concept and combining with AND)
+                      not_vector = scores["mask"] & (~tier1_concept_matrix[:, cand_concept_idx])
+                      not_iou_score = iou(not_vector, neuron_vector)
+                      # print(f"    NOT with concept: {cand_concept_name} ({cand_concept_idx}), IoU: {not_iou_score}, lift: {lift(not_vector, neuron_vector)}, support: {support(not_vector, neuron_vector)}")
+                      canonical_not_formula = canonicalize(("and", scores["formula"], ("not", ("leaf", cand_concept_idx))))
+                      if canonical_not_formula not in score_cache:
+                        new_beam.append({'formula': canonical_not_formula, 'iou': not_iou_score, 'lift': lift(not_vector, neuron_vector), 'support': support(not_vector, neuron_vector), 'mask': not_vector, 'complexity': formula_len})  # complexity of 2 for combining 2 concepts
+                        score_cache[canonical_not_formula] = {
+                            "formula": canonical_not_formula,
+                            "iou": not_iou_score,
+                            "lift": lift(not_vector, neuron_vector),
+                            "support": support(not_vector, neuron_vector),
+                            "mask": not_vector,
+                            "complexity": formula_len,
+                        }
+
+              # trim the beam to the top k combinations based on iou score, while also considering complexity (e.g., we could apply a penalty to the iou score based on the complexity of the explanation to encourage simpler explanations)
+              new_beam.sort(key=lambda x: x['iou'] * (settings.COMPLEXITY_PENALTY ** x['complexity']), reverse=True)  # sort by iou score with a penalty for complexity
+              beam = new_beam[:settings.BEAM_SIZE]
+            
+            # after finishing the beam search, we would have a set of top compositional explanations for this neuron based on their iou scores with the target neuron activations, and we can save these explanations and their scores as part of our results for analysis and visualization in the sentence report. We can also analyze the final explanations to see which concepts are most commonly involved in high-iou explanations for this neuron, which can give us insights into what this neuron is responding to.
+            print(f"Top explanations for neuron {neuron} for interval {interval}:")
+            for explanation in beam:
+                formula = explanation['formula']
+                iou_score = explanation['iou']
+                lift_score = explanation['lift']
+                support_score = explanation['support']
+                complexity = explanation['complexity']
+                print(f"  Explanation: {pretty_print_formula(formula, tier1_concept_names)}, IoU: {iou_score}, Lift: {lift_score}, Support: {support_score}, Complexity: {complexity}")
+                # want to display concept names instead of indices in the explanation for better interpretability, so we can write a helper function to convert the formula with concept indices into a formula with concept names by looking up the concept names from the tier1_concept_names list using the indices. This way, we can have more interpretable explanations that indicate which concepts are involved in the explanation for the neuron activations.
 
 
     # map from concept and neuron to iou score, to find the overall highest iou concepts
