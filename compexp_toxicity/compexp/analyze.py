@@ -1,4 +1,5 @@
 
+import json
 import os
 import numpy as np
 from sklearn.cluster import KMeans
@@ -223,6 +224,8 @@ def pretty_print_formula(formula, concept_names):
 # go through each respective column of the tier 1 concept matrix and see which one has the highest iou with the target neuron activations, and then we can use that as a starting point for our beam search to find a compositional explanation that has high iou with the target neuron activations
 
 def main():
+
+    results = []
     
     # load up activations
     activations = np.load("/workspace/compexp_outputs_full/val_activations.npy")
@@ -368,6 +371,40 @@ def main():
                 complexity = explanation['complexity']
                 print(f"  Explanation: {pretty_print_formula(formula, tier1_concept_names)}, IoU: {iou_score}, Lift: {lift_score}, Support: {support_score}, Complexity: {complexity}")
                 # want to display concept names instead of indices in the explanation for better interpretability, so we can write a helper function to convert the formula with concept indices into a formula with concept names by looking up the concept names from the tier1_concept_names list using the indices. This way, we can have more interpretable explanations that indicate which concepts are involved in the explanation for the neuron activations.
+
+            results.append({
+              "neuron": neuron,
+              "interval": [float(interval[0]), float(interval[1])],
+              "num_examples_in_interval": int(neuron_vector.sum()),
+              "top_explanations": [
+                  {
+                      "formula": explanation["formula"],
+                      "pretty_formula": pretty_print_formula(explanation["formula"], tier1_concept_names),
+                      "iou": float(explanation["iou"]),
+                      "lift": float(explanation["lift"]),
+                      "support": float(explanation["support"]),
+                      "complexity": int(explanation["complexity"]),
+                  }
+                  for explanation in beam
+              ],
+          })
+
+    os.makedirs(settings.RESULT, exist_ok=True)
+    with open(os.path.join(settings.RESULT, "interval_analysis.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "metadata": {
+                    "neurons": settings.NEURONS,
+                    "num_clusters": settings.NUM_CLUSTERS,
+                    "beam_size": settings.BEAM_SIZE,
+                    "max_formula_length": settings.MAX_FORMULA_LENGTH,
+                    "complexity_penalty": settings.COMPLEXITY_PENALTY,
+                },
+                "results": results,
+            },
+            f,
+            indent=2,
+        )
 
 
     # map from concept and neuron to iou score, to find the overall highest iou concepts
