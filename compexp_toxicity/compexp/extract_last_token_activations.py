@@ -178,13 +178,25 @@ def extract_activations(model: AutoModelForSequenceClassification, tokenized_inp
     # move to cpu and convert to numpy for easier saving and downstream analysis, since we don't need to do any more PyTorch operations on the activations after this point, we can convert them to NumPy arrays which are more standard for data storage and analysis in Python, and also ensure that they are on the CPU so that we can save them without needing GPU resources, also needs to be on cpu to convert to numpy since numpy doesn't work with GPU tensors
     return activations.cpu().float().numpy()
 
-def main():
-    args = parse_args()
-    df = load_and_prepare_df(args.dataset_dir)
-    _df_train, df_val = split_multilabel(df, args.val_size, args.seed)
-    if args.limit is not None:
-        df_val = df_val.head(args.limit).reset_index(drop=True)
-    model, tokenizer = load_model_and_tokenizer(args.model_name, args.model_path)
+
+def run_extraction(
+    dataset_dir: Path,
+    model_name: str,
+    model_path: Path | None,
+    output_dir: Path,
+    layer: int,
+    batch_size: int,
+    max_len: int,
+    val_size: float,
+    seed: int,
+    limit: int | None = None,
+) -> None:
+    # this is the main function that will run the whole extraction process, including loading the dataset, preparing the dataframes, loading the model and tokenizer, running the forward passes to extract activations, and saving the results to the output directory
+    df = load_and_prepare_df(dataset_dir)
+    _df_train, df_val = split_multilabel(df, val_size, seed)
+    if limit is not None:
+        df_val = df_val.head(limit).reset_index(drop=True)
+    model, tokenizer = load_model_and_tokenizer(model_name, model_path)
     model.eval()  # set model to evaluation mode since we're just doing inference
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -193,13 +205,13 @@ def main():
 
     # we will extract activations for the validation set since that's what we will be analyzing with the concepts later on
     all_activations = []
-    for i in range(0, len(df_val), args.batch_size):
-        batch_texts = df_val["input"].iloc[i : i + args.batch_size].tolist()
-        tokenized_inputs = tokenize_batch(batch_texts, tokenizer, args.max_len)
+    for i in range(0, len(df_val), batch_size):
+        batch_texts = df_val["input"].iloc[i : i + batch_size].tolist()
+        tokenized_inputs = tokenize_batch(batch_texts, tokenizer, max_len)
         # move tokenized inputs to the same device as the model
         # this for each key-value pair in the tokenized_inputs dictionary, so for example if tokenized_inputs has keys "input_ids" and "attention_mask", it will move both of those tensors to the device (GPU or CPU) that the model is on, ensuring that the inputs are on the same device as the model for the forward pass
         tokenized_inputs = {k: v.to(device) for k, v in tokenized_inputs.items()}
-        batch_activations = extract_activations(model, tokenized_inputs, args.layer)
+        batch_activations = extract_activations(model, tokenized_inputs, layer)
         # all_activations is a list of numpy arrays, where each array has shape (batch_size, hidden_dim) and contains the activations for the last non-pad token for each sequence in that batch
         all_activations.append(batch_activations)
 
@@ -213,26 +225,42 @@ def main():
     # save the activations and metadata to the output directory
 
     # parents=True means it will create any necessary parent directories if they don't exist, exist_ok=True means it won't raise an error if the directory already exists, necessary parent directories would be anything in the path that doesn't already exist, for example if output_dir is "compexp_toxicity/compexp/outputs" and "compexp_toxicity/compexp" already exists but "outputs" doesn't, it will create the "outputs" directory without raising an error about the directory already existing
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # saving in npy format as "val_activations.npy" in the output directory
-    np.save(args.output_dir / "val_activations.npy", all_activations)
+    np.save(output_dir / "val_activations.npy", all_activations)
 
     # saving the metadata (input texts and labels) for the validation set as "val_metadata.csv" in the output directory
-    df_val[["input", "labels"]].to_csv(args.output_dir / "val_metadata.csv", index=False)
+    df_val[["input", "labels"]].to_csv(output_dir / "val_metadata.csv", index=False)
 
     # maybe also save layer, model name / path, max)len, val_size, seed
     metadata = {
-        "model_name_or_path": args.model_path.as_posix() if args.model_path else args.model_name,
-        "layer": args.layer,
-        "max_len": args.max_len,
-        "val_size": args.val_size,
-        "seed": args.seed,
+        "model_name_or_path": model_path.as_posix() if model_path else model_name,
+        "layer": layer,
+        "max_len": max_len,
+        "val_size": val_size,
+        "seed": seed,
     }
 
     # save the metadata as a json file in the output directory, named "extraction_metadata.json"
-    with open(args.output_dir / "extraction_metadata.json", "w") as f:
+    with open(output_dir / "extraction_metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
+
+def main():
+    args = parse_args()
+    run_extraction(
+        dataset_dir=args.dataset_dir,
+        model_name=args.model_name,
+        model_path=args.model_path,
+        output_dir=args.output_dir,
+        layer=args.layer,
+        batch_size=args.batch_size,
+        max_len=args.max_len,
+        val_size=args.val_size,
+        seed=args.seed,
+        limit=args.limit,
+    )
+    
 
 if __name__ == "__main__":
     main()

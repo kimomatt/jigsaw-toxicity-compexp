@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import time
@@ -66,22 +67,23 @@ def load_jigsaw_examples_from_csv(
 
 # basically need to do phase 6 stuff, which is building a tier 1 concept set based on a vocabulary of top-k frequent non-stopword tokens from the Jigsaw dataset, and then computing the concept values for each text based on whether it contains each of those top-k words, and then printing out some stats about the resulting concept set.
 
-def main() -> None:
-
-    run_output_dir = Path("/workspace/compexp_outputs_full")
+def build_tier1_matrix(
+    run_output_dir: Path,
+    top_k: int = 300,
+    min_doc_freq: int = 20,
+    max_doc_frac: float = 0.7,
+) -> None:
     output_dir = run_output_dir / "conceptset_tier1"
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
         ids, texts = load_jigsaw_examples_from_csv(dataset_dir=run_output_dir)
     except (FileNotFoundError, ValueError) as exc:
-        print("Unable to load jigsaw examples from csv:", exc)
-        return
+        raise RuntimeError(f"Unable to load jigsaw examples from csv: {exc}") from exc
 
-    max_doc_frac = 0.7
     vocab = build_tier1_vocabulary(
         texts,
-        top_k=300,
-        min_doc_freq=20,
+        top_k=top_k,
+        min_doc_freq=min_doc_freq,
         max_doc_frac=max_doc_frac,
     )
     print("Built vocabulary size:", len(vocab))
@@ -95,8 +97,8 @@ def main() -> None:
         text_ids=ids,
         meta={
             "dataset": "val_metadata_csv",
-            "tier1_top_k": 300,
-            "tier1_min_doc_freq": 20,
+            "tier1_top_k": top_k,
+            "tier1_min_doc_freq": min_doc_freq,
             "tier1_max_doc_frac": max_doc_frac,
             "tier1_vocab_size": len(vocab),
             "fit_rows": len(texts),
@@ -126,6 +128,30 @@ def main() -> None:
     tier1_concept_metadata = conceptset.meta or {}
     with open(output_dir / "conceptset_tier1_metadata.json", "w") as f:
         json.dump(tier1_concept_metadata, f, indent=2)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Build Tier 1 concept matrix.")
+    parser.add_argument(
+        "--run-output-dir",
+        type=Path,
+        default=Path("/workspace/compexp_outputs_full"),
+    )
+    parser.add_argument("--top-k", type=int, default=300)
+    parser.add_argument("--min-doc-freq", type=int, default=20)
+    parser.add_argument("--max-doc-frac", type=float, default=0.7)
+    return parser.parse_args()
+
+
+def main() -> None:
+    # run_output_dir = Path("/workspace/compexp_outputs_full")
+    args = parse_args()
+    build_tier1_matrix(
+        run_output_dir=args.run_output_dir,
+        top_k=args.tier1_top_k,
+        min_doc_freq=args.tier1_min_doc_freq,
+        max_doc_frac=args.tier1_max_doc_frac,
+    )
+    
 
 
 if __name__ == "__main__":

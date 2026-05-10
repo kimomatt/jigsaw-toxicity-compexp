@@ -1,6 +1,8 @@
 
+import argparse
 import json
 import os
+from pathlib import Path
 import numpy as np
 from sklearn.cluster import KMeans
 
@@ -223,19 +225,18 @@ def pretty_print_formula(formula, concept_names):
 
 # go through each respective column of the tier 1 concept matrix and see which one has the highest iou with the target neuron activations, and then we can use that as a starting point for our beam search to find a compositional explanation that has high iou with the target neuron activations
 
-def main():
-
+def run_analysis(path_to_activations: Path, path_to_concept_matrix: Path, path_to_concept_names: Path, result_dir: Path):
     results = []
     
     # load up activations
-    activations = np.load("/workspace/compexp_outputs_full/val_activations.npy")
+    activations = np.load(path_to_activations)
 
 
     # load up tier 1 concept matrix
-    tier1_concept_matrix = np.load("/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1.npy")
+    tier1_concept_matrix = np.load(path_to_concept_matrix)
     tier1_concept_matrix = tier1_concept_matrix.astype(bool)
 
-    with open("/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1_names.txt", "r", encoding="utf-8") as f:
+    with open(path_to_concept_names, "r", encoding="utf-8") as f:
       tier1_concept_names = [line.strip() for line in f]
 
 
@@ -389,8 +390,8 @@ def main():
               ],
           })
 
-    os.makedirs(settings.RESULT, exist_ok=True)
-    with open(os.path.join(settings.RESULT, "interval_analysis.json"), "w", encoding="utf-8") as f:
+    os.makedirs(result_dir, exist_ok=True)
+    with open(result_dir / "interval_analysis.json", "w", encoding="utf-8") as f:
         json.dump(
             {
                 "metadata": {
@@ -406,6 +407,20 @@ def main():
             indent=2,
         )
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run analysis for compositional explanations")
+    parser.add_argument("--path_to_activations", type=Path, help="Path to the extracted activations numpy file", default="/workspace/compexp_outputs_full/val_activations.npy")
+    parser.add_argument("--path_to_concept_matrix", type=Path, help="Path to the tier 1 concept matrix numpy file", default="/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1.npy")
+    parser.add_argument("--path_to_concept_names", type=Path, help="Path to the tier 1 concept names text file", default="/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1_names.txt")
+    parser.add_argument("--result_dir", type=Path, help="Directory to save the analysis results", default=settings.RESULT)
+    return parser.parse_args()
+
+def main():
+
+    args = parse_args()
+    run_analysis(args.path_to_activations, args.path_to_concept_matrix, args.path_to_concept_names, args.result_dir)
+    
+    
 
     # map from concept and neuron to iou score, to find the overall highest iou concepts
     # top_concepts = {}
