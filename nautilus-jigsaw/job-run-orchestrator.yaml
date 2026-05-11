@@ -52,6 +52,10 @@ spec:
               set -euxo pipefail
               cd /workspace
 
+              mkdir -p /workspace/logs
+              LOG_FILE=/workspace/logs/compexp_orchestrator_$(date +%Y%m%d_%H%M%S).log
+              exec > >(tee "$LOG_FILE") 2>&1
+
               pip install -U "numpy<2" tensorboard
               pip install -U \
                 "transformers==4.44.2" \
@@ -66,10 +70,7 @@ spec:
 
               python -m spacy download en_core_web_sm
 
-              mkdir -p /workspace/logs
-
               python /workspace/repo/compexp_toxicity/compexp/orchestrator.py \
                 --model-path /workspace/sequence_classification/saved_model \
                 --output-dir /workspace/compexp_outputs_full \
-                --batch-size 1 \
-                2>&1 | tee /workspace/logs/compexp_orchestrator_$(date +%Y%m%d_%H%M%S).log
+                --batch-size 1

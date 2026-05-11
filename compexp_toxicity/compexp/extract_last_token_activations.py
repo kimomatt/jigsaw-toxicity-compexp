@@ -215,9 +215,16 @@ def run_extraction(
 
     # we will extract activations for the validation set since that's what we will be analyzing with the concepts later on
     all_activations = []
-    for i in range(0, len(df_val), batch_size):
+    total_batches = (len(df_val) + batch_size - 1) // batch_size
+    for batch_idx, i in enumerate(range(0, len(df_val), batch_size), start=1):
         batch_texts = df_val["input"].iloc[i : i + batch_size].tolist()
         tokenized_inputs = tokenize_batch(batch_texts, tokenizer, max_len)
+        seq_len = int(tokenized_inputs["input_ids"].shape[1])
+        if batch_idx == 1 or batch_idx % 100 == 0 or batch_idx == total_batches:
+            print(
+                f"Extraction progress: batch {batch_idx}/{total_batches}, "
+                f"rows {i}-{min(i + batch_size, len(df_val)) - 1}, seq_len={seq_len}"
+            )
         # move tokenized inputs to the same device as the model
         # this for each key-value pair in the tokenized_inputs dictionary, so for example if tokenized_inputs has keys "input_ids" and "attention_mask", it will move both of those tensors to the device (GPU or CPU) that the model is on, ensuring that the inputs are on the same device as the model for the forward pass
         tokenized_inputs = {k: v.to(device) for k, v in tokenized_inputs.items()}
