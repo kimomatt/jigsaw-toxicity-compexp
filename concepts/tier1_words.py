@@ -7,7 +7,6 @@ from functools import lru_cache
 import string
 from typing import Iterable, List, Sequence
 
-import numpy as np
 import spacy
 
 from .base import Concept
@@ -62,7 +61,7 @@ def _is_pure_punctuation(token: str) -> bool:
     return bool(token) and all(char in string.punctuation for char in token)
 
 # takes a list of sentences and returns a list of sets of tokens for each sentence, using spaCy tokenization. This allows for fast membership testing of whether a word is present in a sentence by checking if it is in the corresponding set as long as u know the index of the sentence in the original list
-# the other reason for it being a set is that it enforces uniqueness of tokens, so then when measuring doc frequency, we count whether a token appears in a document at least once rather than how many times it appears total
+# this is still useful for downstream binary concept construction even though vocabulary selection now uses total token frequency rather than document frequency
 def _token_sets(texts: Sequence[str]) -> List[set[str]]:
     """Tokenize each text once and cache set membership for fast binary lookups."""
     return [set(_spacy_tokens(text)) for text in texts]
@@ -72,43 +71,42 @@ def build_tier1_vocabulary(
     texts: Sequence[str],
     *,
     top_k: int = 200,
-    min_doc_freq: int = 5,
-    max_doc_frac: float = 0.4,
+    min_freq: int | None = None,
+    max_freq: int | None = None,
     stopwords: Iterable[str] = DEFAULT_STOPWORDS,
 ) -> List[str]:
-    """Build Tier 1 vocabulary from top-k frequent non-stopword spaCy tokens.
-
-    Frequency is document frequency (how many texts contain the token).
-    """
-    # takes in a sequence of texts and the number of top tokens to return, as well as how many times a word needs to appaear to be included in the candidates and the maximum fraction of documents a word can appear in to be included in the candidates (if it appears in more than that fraction of documents, it is likely not a useful concept for distinguishing between different texts)
+    """Build Tier 1 vocabulary from top-k total-frequency non-stopword spaCy tokens."""
     if top_k < 0:
         raise ValueError("top_k must be >= 0")
-    if min_doc_freq < 1:
-        raise ValueError("min_doc_freq must be >= 1")
-    if not (0.0 < max_doc_frac <= 1.0):
-        raise ValueError("max_doc_frac must be in (0.0, 1.0]")
+    if min_freq is not None and min_freq < 1:
+        raise ValueError("min_freq must be >= 1")
+    if max_freq is not None and max_freq < 1:
+        raise ValueError("max_freq must be >= 1")
+    if min_freq is not None and max_freq is not None and min_freq > max_freq:
+        raise ValueError("min_freq must be <= max_freq")
 
     stopword_set = {w.strip().lower() for w in stopwords}
-    n_docs = len(texts)
-    max_doc_count = max(1, int(np.floor(max_doc_frac * n_docs)))
 
-    # going thru each token in each text
-    doc_freq: Counter[str] = Counter()
-    for toks in _token_sets(texts):
-        for tok in toks:
+    total_freq: Counter[str] = Counter()
+    for text in texts:
+        for tok in _spacy_tokens(text):
             if tok in stopword_set:
                 continue
             if _is_pure_punctuation(tok):
                 continue
-            doc_freq[tok] += 1
+            total_freq[tok] += 1
 
-    candidates = [
-        (w, c)
-        for w, c in doc_freq.items()
-        if c >= min_doc_freq and c <= max_doc_count
-    ]
+    candidates = []
+    for w, c in total_freq.items():
+        if min_freq is not None and c < min_freq:
+            continue
+        if max_freq is not None and c > max_freq:
+            continue
+        candidates.append((w, c))
+
     candidates.sort(key=lambda x: (-x[1], x[0]))
     return [w for w, _ in candidates[:top_k]]
+
 
 # turn a list of words into a list of concept objects
 def make_word_concepts(words: Sequence[str]) -> List[Concept]:

@@ -10,8 +10,8 @@ import numpy as np
 #   meta={
 #       "dataset": "val_metadata_csv",
 #       "tier1_top_k": 300,
-#       "tier1_min_doc_freq": 20,
-#       "tier1_max_doc_frac": max_doc_frac,
+#       "tier1_min_freq": 20,
+#       "tier1_max_freq": max_freq,
 #       "tier1_vocab_size": len(vocab),
 #       "fit_rows": len(texts),
 #   },

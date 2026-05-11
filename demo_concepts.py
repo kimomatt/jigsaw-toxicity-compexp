@@ -296,12 +296,13 @@ def run_phase_6_tier1_vocab() -> None:
         return
 
     del fit_ids  # not needed for vocab fitting
-    max_doc_frac = 0.4
+    min_freq = 20
+    max_freq = None
     vocab = build_tier1_vocabulary(
         fit_texts,
         top_k=300,
-        min_doc_freq=20,
-        max_doc_frac=max_doc_frac,
+        min_freq=min_freq,
+        max_freq=max_freq,
     )
     print("Built vocabulary size:", len(vocab))
     print("First 20 vocab words:", ", ".join(vocab[:20]))
@@ -317,8 +318,8 @@ def run_phase_6_tier1_vocab() -> None:
             "demo_phase": 6,
             "dataset": "jigsaw_train_csv",
             "tier1_top_k": 300,
-            "tier1_min_doc_freq": 20,
-            "tier1_max_doc_frac": max_doc_frac,
+            "tier1_min_freq": min_freq,
+            "tier1_max_freq": max_freq,
             "tier1_vocab_size": len(vocab),
             "fit_rows": len(fit_texts),
         },

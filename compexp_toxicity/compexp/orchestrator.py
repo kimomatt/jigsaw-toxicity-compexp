@@ -7,6 +7,12 @@ from pathlib import Path
 
 # should only have to call this script and it should run the whole pipeline
 
+
+def parse_optional_int(value: str) -> int | None:
+    if value.lower() in {"none", "null"}:
+        return None
+    return int(value)
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Run the full compositional explanation pipeline: extraction, tier 1 concept matrix building, and analysis.")
 
@@ -45,14 +51,14 @@ def parse_args():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
+        default=1,
         help="Batch size for activation extraction",
     )
     parser.add_argument(
         "--max-len",
-        type=int,
-        default=512,
-        help="Maximum tokenized sequence length",
+        type=parse_optional_int,
+        default=None,
+        help="Maximum tokenized sequence length; use 'none' for no truncation cap",
     )
     parser.add_argument(
         "--val-size",
@@ -75,9 +81,9 @@ def parse_args():
 
     # TIER 1 CONCEPT MATRIX ARGS
 
-    parser.add_argument("--top-k", type=int, default=300)
-    parser.add_argument("--min-doc-freq", type=int, default=20)
-    parser.add_argument("--max-doc-frac", type=float, default=0.7)
+    parser.add_argument("--top-k", type=int, default=2000)
+    parser.add_argument("--min-freq", type=int, default=None)
+    parser.add_argument("--max-freq", type=int, default=None)
 
     # ANALYSIS ARGS
     parser.add_argument(
@@ -112,8 +118,8 @@ def main():
   build_tier1_matrix(
         run_output_dir=args.output_dir,
         top_k=args.top_k,
-        min_doc_freq=args.min_doc_freq,
-        max_doc_frac=args.max_doc_frac,
+        min_freq=args.min_freq,
+        max_freq=args.max_freq,
     )
 
   # then should run the analysis to find compositional explanations for each neuron based on the tier 1 concept matrix and the neuron activations, and save the results in a format that can be easily analyzed and visualized in the sentence report.

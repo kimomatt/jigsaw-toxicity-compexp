@@ -10,6 +10,12 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 hf_token = os.environ.get("HF_TOKEN")
 
+
+def parse_optional_int(value: str) -> int | None:
+    if value.lower() in {"none", "null"}:
+        return None
+    return int(value)
+
 # parse args
 
 # for args, we should be able to take in the path to the dataset, the path to the model, the layer we want to extract from, and the output path for the activations, also maybe some args for batch size and max sequence length for tokenization, and maybe a random seed for reproducibility when we recreate the dataset split
@@ -56,9 +62,9 @@ def parse_args():
     )
     parser.add_argument(
         "--max-len",
-        type=int,
+        type=parse_optional_int,
         default=512,
-        help="Maximum tokenized sequence length",
+        help="Maximum tokenized sequence length; use 'none' for no truncation cap",
     )
     parser.add_argument(
         "--val-size",
@@ -139,16 +145,20 @@ def load_model_and_tokenizer(model_name: str, model_path: Path):
     return model, tokenizer
 
 # tokenize one batch
-def tokenize_batch(texts: list[str], tokenizer: AutoTokenizer, max_len: int):
-    # tokenize the input texts using the provided tokenizer, with padding and truncation to max_len, and return the tokenized inputs as a dictionary of tensors
-    # we will use the tokenizer's pad token for padding, and we will truncate sequences that exceed max_len to ensure consistent input size for batching
-    tokenized = tokenizer(
-        texts,
-        padding="longest",
-        truncation=True,
-        max_length=max_len,
-        return_tensors="pt",
-    )
+def tokenize_batch(texts: list[str], tokenizer: AutoTokenizer, max_len: int | None):
+    # tokenize the input texts using the provided tokenizer. when max_len is set, truncate to that cap;
+    # otherwise keep the full tokenized sequence length for each example in the batch.
+    tokenizer_kwargs = {
+        "padding": "longest",
+        "return_tensors": "pt",
+    }
+    if max_len is None:
+        tokenizer_kwargs["truncation"] = False
+    else:
+        tokenizer_kwargs["truncation"] = True
+        tokenizer_kwargs["max_length"] = max_len
+
+    tokenized = tokenizer(texts, **tokenizer_kwargs)
     return tokenized
 
 # run one forward pass with output_hidden_states=True
@@ -186,7 +196,7 @@ def run_extraction(
     output_dir: Path,
     layer: int,
     batch_size: int,
-    max_len: int,
+    max_len: int | None,
     val_size: float,
     seed: int,
     limit: int | None = None,
