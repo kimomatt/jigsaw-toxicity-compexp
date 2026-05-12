@@ -8,6 +8,7 @@ import string
 from typing import Iterable, List, Sequence
 
 import spacy
+import numpy as np
 
 from .base import Concept
 
