@@ -10,7 +10,7 @@ ALPHA = 0.1
 RESULT = "/workspace/compexp_outputs_full/results"
 
 BEAM_SIZE = 10
-MAX_FORMULA_LENGTH = 20
+MAX_FORMULA_LENGTH = 5
 COMPLEXITY_PENALTY = 1.00
 
 NUM_CLUSTERS = 5
