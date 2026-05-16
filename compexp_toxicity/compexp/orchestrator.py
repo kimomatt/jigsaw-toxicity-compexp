@@ -1,7 +1,10 @@
 from compexp_toxicity.compexp.analyze import run_analysis
 from compexp_toxicity.compexp.make_tier1_concept_matrix import build_tier1_matrix
 from compexp_toxicity.compexp.extract_last_token_activations import run_extraction
+from compexp_toxicity.compexp import settings
+from concepts.tier1_words import DEFAULT_STOPWORDS
 import argparse
+import json
 from pathlib import Path
 
 
@@ -96,9 +99,48 @@ def parse_args():
 
     return parser.parse_args()
 
+
+def write_run_config(args: argparse.Namespace) -> None:
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result_dir = args.result_dir if args.result_dir is not None else args.output_dir / "results"
+    run_config = {
+        "extraction": {
+            "dataset_dir": args.dataset_dir.as_posix(),
+            "model_name_or_path": args.model_path.as_posix() if args.model_path else args.model_name,
+            "output_dir": args.output_dir.as_posix(),
+            "layer": args.layer,
+            "batch_size": args.batch_size,
+            "max_len": args.max_len,
+            "val_size": args.val_size,
+            "seed": args.seed,
+            "limit": args.limit,
+        },
+        "tier1": {
+            "frequency_type": "total",
+            "top_k": args.top_k,
+            "min_freq": args.min_freq,
+            "max_freq": args.max_freq,
+            "stopwords": sorted(DEFAULT_STOPWORDS),
+        },
+        "analysis": {
+            "result_dir": result_dir.as_posix(),
+            "neurons": settings.NEURONS,
+            "num_clusters": settings.NUM_CLUSTERS,
+            "beam_size": settings.BEAM_SIZE,
+            "max_formula_length": settings.MAX_FORMULA_LENGTH,
+            "complexity_penalty": settings.COMPLEXITY_PENALTY,
+        },
+    }
+
+    with open(output_dir / "run_config.json", "w", encoding="utf-8") as f:
+        json.dump(run_config, f, indent=2)
+
 def main():
 
   args = parse_args()  
+  write_run_config(args)
 
   # should first extract activations from the model
   run_extraction(

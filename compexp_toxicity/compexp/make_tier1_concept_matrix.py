@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from concepts.build import build_concept_set
-from concepts.tier1_words import build_tier1_vocabulary
+from concepts.tier1_words import DEFAULT_STOPWORDS, build_tier1_vocabulary
 from concepts.utils import coverage_stats, validate_binary_matrix
 
 # ds_split is a list of dictionaries, where each dictionary represents a single data example with keys like "id" and "text". The function dataset_to_examples takes this list of dictionaries and extracts the "id" and "text" values into two separate lists, which are then returned as a tuple. This allows us to convert from a more general dataset format (list of dicts) into the specific aligned format (ids and texts) that our concept building functions expect.
@@ -97,9 +97,11 @@ def build_tier1_matrix(
         text_ids=ids,
         meta={
             "dataset": "val_metadata_csv",
+            "tier1_frequency_type": "total",
             "tier1_top_k": top_k,
             "tier1_min_freq": min_freq,
             "tier1_max_freq": max_freq,
+            "tier1_stopwords": sorted(DEFAULT_STOPWORDS),
             "tier1_vocab_size": len(vocab),
             "fit_rows": len(texts),
         },

@@ -252,11 +252,14 @@ def run_extraction(
 
     # maybe also save layer, model name / path, max)len, val_size, seed
     metadata = {
+        "dataset_dir": dataset_dir.as_posix(),
         "model_name_or_path": model_path.as_posix() if model_path else model_name,
         "layer": layer,
+        "batch_size": batch_size,
         "max_len": max_len,
         "val_size": val_size,
         "seed": seed,
+        "limit": limit,
     }
 
     # save the metadata as a json file in the output directory, named "extraction_metadata.json"
