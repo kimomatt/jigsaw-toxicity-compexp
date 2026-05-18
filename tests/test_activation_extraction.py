@@ -4,6 +4,7 @@ import pytest
 import numpy as np
 import csv
 from compexp_toxicity.compexp.extract_last_token_activations import load_and_prepare_df, extract_activations, tokenize_batch, split_multilabel
+from compexp_toxicity.compexp.extract_mean_pool_activations import extract_activations as extract_mean_pool_activations
 
 # tightly coupled to jigsaw dataset, instead i think for each run u pass in custom load_and_prepare_df function that transforms the dataset into a simple two column structure with "input" and "labels", where "input" is the text to be fed into the model and "labels" is the multi-label target vector for that text, then we can reuse this code for other datasets in the future by just writing different load_and_prepare_df functions without having to change the rest of the code for tokenization and activation extraction
 # TOX_COLS = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
@@ -156,4 +157,60 @@ def test_extract_activations_uses_last_non_pad_token():
     ], dtype=np.float32)
 
     assert np.array_equal(activations, expected)
+
+def test_extract_mean_pool_activations():
+    class FakeOutput:
+        def __init__(self, hidden_states):
+            self.hidden_states = hidden_states
+
+    class FakeModel:
+        def __call__(self, **kwargs):
+            batch_size = kwargs["input_ids"].shape[0]
+            seq_len = kwargs["input_ids"].shape[1]
+            hidden_dim = 4
+
+            hidden_states = []
+            for layer in range(3):
+                layer_tensor = torch.zeros(batch_size, seq_len, hidden_dim)
+                for i in range(batch_size):
+                    for j in range(seq_len):
+                        layer_tensor[i, j] = (layer + 1) * 100 + (i + 1) * 10 + j
+                hidden_states.append(layer_tensor)
+
+            # hidden states would look like this for layer 1:
+            # [
+            # seq0[
+            #         [210, 210, 210, 210],
+            #         [211, 211, 211, 211],
+            #         [212, 212, 212, 212],
+            #         [213, 213, 213, 213],
+            #     ],
+            # seq1[
+            #         [220, 220, 220, 220],
+            #         [221, 221, 221, 221],
+            #         [222, 222, 222, 222],
+            #         [223, 223, 223, 223],
+            #     ],
+            # ]
+
+            return FakeOutput(tuple(hidden_states))
+
+    model = FakeModel()
+    tokenized_inputs = {
+        "input_ids": torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]]),
+        "attention_mask": torch.tensor([[1, 1, 1, 0], [1, 1, 0, 0]]),
+    }
+    # for this set of inputs, you would have a batch size of 2 and a seq len of 4 and then 4 activations per toke
+
+    activations = extract_mean_pool_activations(model, tokenized_inputs, layer=1)
+
+    assert isinstance(activations, np.ndarray)
+    assert activations.shape == (2, 4)
+
+    expected = np.array([
+        [211, 211, 211, 211],  # seq 0, mean of indices 0, 1, 2 is 211
+        [220.5, 220.5, 220.5, 220.5],  # seq 1, mean of indices 0, 1 is 220.5
+    ], dtype=np.float32)
+
+    assert np.allclose(activations, expected)
     

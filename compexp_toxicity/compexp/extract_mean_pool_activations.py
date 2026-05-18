@@ -22,7 +22,7 @@ def parse_optional_int(value: str) -> int | None:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Extract last-token hidden-state activations for concept-expression analysis."
+        description="Extract mean pooled activations for concept-expression analysis."
     )
     parser.add_argument(
         "--dataset-dir",
@@ -177,16 +177,16 @@ def extract_activations(model: AutoModelForSequenceClassification, tokenized_inp
         # find the indices of the last non-pad tokens in each sequence
         attention_mask = tokenized_inputs["attention_mask"]  # (batch_size, seq_len)
         seq_lengths = attention_mask.sum(dim=1)  # (batch_size,) gives us the length of each sequence before padding bc theres 1s for real tokens and 0s for pads
-        last_token_indices = seq_lengths - 1  # (batch_size,) gives us the index of the last non-pad token for each sequence
 
-        # gather the activations for the last non-pad tokens using advanced indexing
-        batch_indices = torch.arange(int(layer_hidden_states.size(0)), device=layer_hidden_states.device)  # (batch_size,), gives us the batch indices [0, 1, 2, ..., batch_size-1] to index into the first dimension of layer_hidden_states, getting the row for each sequence in the batch
+        # this is the point where we want to differ from the extract last token activations script and instead do mean pooling over all the non-pad tokens, so instead of just taking the activations at the last_token_indices, we want to take the mean of the activations for all tokens up to seq_lengths for each sequence in the batch, which means we need to create a mask that zeroes out the pad token activations and then take the mean over the seq_len dimension for each sequence
 
-        # getting all the neuron activations for the last non-pad token for each sequence by indexing into layer_hidden_states with batch_indices and last_token_indices, which gives us a tensor of shape (batch_size, hidden_dim) containing the activations for the last non-pad token in each sequence in the batch
-        activations = layer_hidden_states[batch_indices, last_token_indices]  # (batch_size, hidden_dim)
+        mask = attention_mask.unsqueeze(-1)  # (batch_size, seq_len, 1) to broadcast over hidden_dim, lets pytorch apply mask to every neuron dimension at each token 
+        masked_hidden_states = layer_hidden_states * mask  # zero out pad token activations, (batch_size, seq_len, hidden_dim)
+        sum_hidden_states = masked_hidden_states.sum(dim=1)  # sum over seq_len dimension, (batch_size, hidden_dim)
+        mean_pooled_activations = sum_hidden_states / seq_lengths.unsqueeze(-1)  # divide by actual sequence lengths to get mean, (batch_size, hidden_dim)
 
     # move to cpu and convert to numpy for easier saving and downstream analysis, since we don't need to do any more PyTorch operations on the activations after this point, we can convert them to NumPy arrays which are more standard for data storage and analysis in Python, and also ensure that they are on the CPU so that we can save them without needing GPU resources, also needs to be on cpu to convert to numpy since numpy doesn't work with GPU tensors
-    return activations.cpu().float().numpy()
+    return mean_pooled_activations.cpu().float().numpy()
 
 
 def run_extraction(
@@ -260,7 +260,7 @@ def run_extraction(
         "val_size": val_size,
         "seed": seed,
         "limit": limit,
-        "pooling": "last_token",
+        "pooling": "mean_pool",
     }
 
     # save the metadata as a json file in the output directory, named "extraction_metadata.json"

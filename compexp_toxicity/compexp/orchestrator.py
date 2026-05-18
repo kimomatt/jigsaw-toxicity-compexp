@@ -1,6 +1,7 @@
 from compexp_toxicity.compexp.analyze import run_analysis
 from compexp_toxicity.compexp.make_tier1_concept_matrix import build_tier1_matrix
-from compexp_toxicity.compexp.extract_last_token_activations import run_extraction
+from compexp_toxicity.compexp.extract_last_token_activations import run_extraction as run_last_token_extraction
+from compexp_toxicity.compexp.extract_mean_pool_activations import run_extraction as run_mean_pool_extraction
 from compexp_toxicity.compexp import settings
 from concepts.tier1_words import DEFAULT_STOPWORDS
 import argparse
@@ -20,6 +21,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run the full compositional explanation pipeline: extraction, tier 1 concept matrix building, and analysis.")
 
     # EXTRACTION ARGS
+
+    parser.add_argument(
+        "--pooling",
+        type=str,
+        choices=["last_token", "mean_pool"],
+        default="last_token",
+        help="Pooling method for activation extraction; 'last_token' extracts activations at the last non-pad token, while 'mean_pool' computes the mean of activations over all non-pad tokens"
+    )
 
     parser.add_argument(
         "--dataset-dir",
@@ -116,6 +125,7 @@ def write_run_config(args: argparse.Namespace) -> None:
             "val_size": args.val_size,
             "seed": args.seed,
             "limit": args.limit,
+            "pooling": args.pooling,
         },
         "tier1": {
             "frequency_type": "total",
@@ -143,18 +153,34 @@ def main():
   write_run_config(args)
 
   # should first extract activations from the model
-  run_extraction(
-        dataset_dir=args.dataset_dir,
-        model_name=args.model_name,
-        model_path=args.model_path,
-        output_dir=args.output_dir,
-        layer=args.layer,
-        batch_size=args.batch_size,
-        max_len=args.max_len,
-        val_size=args.val_size,
-        seed=args.seed,
-        limit=args.limit,
-    )
+  if args.pooling == "last_token":
+      run_last_token_extraction(
+          dataset_dir=args.dataset_dir,
+          model_name=args.model_name,
+          model_path=args.model_path,
+          output_dir=args.output_dir,
+          layer=args.layer,
+          batch_size=args.batch_size,
+          max_len=args.max_len,
+          val_size=args.val_size,
+          seed=args.seed,
+          limit=args.limit,
+      )
+  elif args.pooling == "mean_pool":
+      run_mean_pool_extraction(
+          dataset_dir=args.dataset_dir,
+          model_name=args.model_name,
+          model_path=args.model_path,
+          output_dir=args.output_dir,
+          layer=args.layer,
+          batch_size=args.batch_size,
+          max_len=args.max_len,
+          val_size=args.val_size,
+          seed=args.seed,
+          limit=args.limit,
+      )
+  else:
+      raise ValueError(f"Invalid pooling method: {args.pooling}")
 
   # then should build the tier 1 concept matrix
   build_tier1_matrix(
