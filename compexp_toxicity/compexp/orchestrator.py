@@ -3,7 +3,7 @@ from compexp_toxicity.compexp.make_tier1_concept_matrix import build_tier1_matri
 from compexp_toxicity.compexp.extract_last_token_activations import run_extraction as run_last_token_extraction
 from compexp_toxicity.compexp.extract_mean_pool_activations import run_extraction as run_mean_pool_extraction
 from compexp_toxicity.compexp import settings
-from concepts.tier1_words import DEFAULT_STOPWORDS
+from concepts.tier1_words import DEFAULT_STOPWORDS, NLTK_STOPWORDS
 import argparse
 import json
 from pathlib import Path
@@ -96,6 +96,13 @@ def parse_args():
     parser.add_argument("--top-k", type=int, default=2000)
     parser.add_argument("--min-freq", type=int, default=None)
     parser.add_argument("--max-freq", type=int, default=None)
+    parser.add_argument(
+        "--stopword-mode",
+        type=str,
+        choices=["minimal", "nltk"],
+        default="minimal",
+        help="Which stopword list to use for filtering candidate words"
+    )
 
     # ANALYSIS ARGS
     parser.add_argument(
@@ -132,7 +139,7 @@ def write_run_config(args: argparse.Namespace) -> None:
             "top_k": args.top_k,
             "min_freq": args.min_freq,
             "max_freq": args.max_freq,
-            "stopwords": sorted(DEFAULT_STOPWORDS),
+            "stopword_mode": args.stopword_mode,
         },
         "analysis": {
             "result_dir": result_dir.as_posix(),
@@ -181,6 +188,13 @@ def main():
       )
   else:
       raise ValueError(f"Invalid pooling method: {args.pooling}")
+  
+  if args.stopword_mode == "minimal":
+      stopwords = DEFAULT_STOPWORDS
+  elif args.stopword_mode == "nltk":
+      stopwords = NLTK_STOPWORDS
+  else:
+      raise ValueError(f"Unsupported stopword mode: {args.stopword_mode}")
 
   # then should build the tier 1 concept matrix
   build_tier1_matrix(
@@ -188,6 +202,7 @@ def main():
         top_k=args.top_k,
         min_freq=args.min_freq,
         max_freq=args.max_freq,
+        stopwords = stopwords,
     )
 
   # then should run the analysis to find compositional explanations for each neuron based on the tier 1 concept matrix and the neuron activations, and save the results in a format that can be easily analyzed and visualized in the sentence report.

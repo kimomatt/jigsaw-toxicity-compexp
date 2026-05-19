@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from concepts.build import build_concept_set
-from concepts.tier1_words import DEFAULT_STOPWORDS, build_tier1_vocabulary
+from concepts.tier1_words import DEFAULT_STOPWORDS, NLTK_STOPWORDS, build_tier1_vocabulary
 from concepts.utils import coverage_stats, validate_binary_matrix
 
 # ds_split is a list of dictionaries, where each dictionary represents a single data example with keys like "id" and "text". The function dataset_to_examples takes this list of dictionaries and extracts the "id" and "text" values into two separate lists, which are then returned as a tuple. This allows us to convert from a more general dataset format (list of dicts) into the specific aligned format (ids and texts) that our concept building functions expect.
@@ -72,6 +72,7 @@ def build_tier1_matrix(
     top_k: int = 300,
     min_freq: int | None = None,
     max_freq: int | None = None,
+    stopwords: Sequence[str] = DEFAULT_STOPWORDS,
 ) -> None:
     output_dir = run_output_dir / "conceptset_tier1"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -85,6 +86,7 @@ def build_tier1_matrix(
         top_k=top_k,
         min_freq=min_freq,
         max_freq=max_freq,
+        stopwords=stopwords,
     )
     print("Built vocabulary size:", len(vocab))
     print("First 20 vocab words:", ", ".join(vocab[:20]))
@@ -101,7 +103,7 @@ def build_tier1_matrix(
             "tier1_top_k": top_k,
             "tier1_min_freq": min_freq,
             "tier1_max_freq": max_freq,
-            "tier1_stopwords": sorted(DEFAULT_STOPWORDS),
+            "tier1_stopwords": sorted(stopwords),
             "tier1_vocab_size": len(vocab),
             "fit_rows": len(texts),
         },
@@ -141,17 +143,33 @@ def parse_args():
     parser.add_argument("--top-k", type=int, default=300)
     parser.add_argument("--min-freq", type=int, default=None)
     parser.add_argument("--max-freq", type=int, default=None)
+    parser.add_argument(
+        "--stopword-mode",
+        type=str,
+        choices=["minimal", "nltk"],
+        default="minimal",
+        help="Which stopword list to use for filtering candidate words"
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     # run_output_dir = Path("/workspace/compexp_outputs_full")
     args = parse_args()
+
+    if args.stopword_mode == "minimal":
+        stopwords = DEFAULT_STOPWORDS
+    elif args.stopword_mode == "nltk":
+        stopwords = NLTK_STOPWORDS
+    else:
+        raise ValueError(f"Unsupported stopword mode: {args.stopword_mode}")
+
     build_tier1_matrix(
         run_output_dir=args.run_output_dir,
         top_k=args.top_k,
         min_freq=args.min_freq,
         max_freq=args.max_freq,
+        stopwords = stopwords,
     )
     
 
