@@ -94,8 +94,15 @@ def parse_args():
     # TIER 1 CONCEPT MATRIX ARGS
 
     parser.add_argument("--top-k", type=int, default=2000)
-    parser.add_argument("--min-freq", type=int, default=None)
-    parser.add_argument("--max-freq", type=int, default=None)
+    parser.add_argument("--min-freq", type=float, default=None)
+    parser.add_argument("--max-freq", type=float, default=None)
+    parser.add_argument(
+        "--tier1-frequency-type",
+        type=str,
+        choices=["total", "document"],
+        default="total",
+        help="How to rank/filter Tier 1 vocabulary candidates",
+    )
     parser.add_argument(
         "--stopword-mode",
         type=str,
@@ -135,7 +142,7 @@ def write_run_config(args: argparse.Namespace) -> None:
             "pooling": args.pooling,
         },
         "tier1": {
-            "frequency_type": "total",
+            "frequency_type": args.tier1_frequency_type,
             "top_k": args.top_k,
             "min_freq": args.min_freq,
             "max_freq": args.max_freq,
@@ -202,7 +209,8 @@ def main():
         top_k=args.top_k,
         min_freq=args.min_freq,
         max_freq=args.max_freq,
-        stopwords = stopwords,
+        stopwords=stopwords,
+        freq_type=args.tier1_frequency_type,
     )
 
   # then should run the analysis to find compositional explanations for each neuron based on the tier 1 concept matrix and the neuron activations, and save the results in a format that can be easily analyzed and visualized in the sentence report.

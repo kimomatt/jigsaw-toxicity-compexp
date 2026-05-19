@@ -70,9 +70,10 @@ def load_jigsaw_examples_from_csv(
 def build_tier1_matrix(
     run_output_dir: Path,
     top_k: int = 300,
-    min_freq: int | None = None,
-    max_freq: int | None = None,
+    min_freq: float | None = None,
+    max_freq: float | None = None,
     stopwords: Sequence[str] = DEFAULT_STOPWORDS,
+    freq_type: str = "total",
 ) -> None:
     output_dir = run_output_dir / "conceptset_tier1"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +88,7 @@ def build_tier1_matrix(
         min_freq=min_freq,
         max_freq=max_freq,
         stopwords=stopwords,
+        freq_type=freq_type,
     )
     print("Built vocabulary size:", len(vocab))
     print("First 20 vocab words:", ", ".join(vocab[:20]))
@@ -99,7 +101,7 @@ def build_tier1_matrix(
         text_ids=ids,
         meta={
             "dataset": "val_metadata_csv",
-            "tier1_frequency_type": "total",
+            "tier1_frequency_type": freq_type,
             "tier1_top_k": top_k,
             "tier1_min_freq": min_freq,
             "tier1_max_freq": max_freq,
@@ -141,8 +143,15 @@ def parse_args():
         default=Path("/workspace/compexp_outputs_full"),
     )
     parser.add_argument("--top-k", type=int, default=300)
-    parser.add_argument("--min-freq", type=int, default=None)
-    parser.add_argument("--max-freq", type=int, default=None)
+    parser.add_argument("--min-freq", type=float, default=None)
+    parser.add_argument("--max-freq", type=float, default=None)
+    parser.add_argument(
+        "--freq-type",
+        type=str,
+        choices=["total", "document"],
+        default="total",
+        help="How to rank/filter Tier 1 vocabulary candidates",
+    )
     parser.add_argument(
         "--stopword-mode",
         type=str,
@@ -169,7 +178,8 @@ def main() -> None:
         top_k=args.top_k,
         min_freq=args.min_freq,
         max_freq=args.max_freq,
-        stopwords = stopwords,
+        stopwords=stopwords,
+        freq_type=args.freq_type,
     )
     
 

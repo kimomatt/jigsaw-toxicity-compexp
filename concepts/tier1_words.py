@@ -202,45 +202,70 @@ def _token_sets(texts: Sequence[str]) -> List[set[str]]:
     return [set(_spacy_tokens(text)) for text in texts]
 
 # after the *, the following parameters must be passed as keyword arguments, not positional arguments. This can help improve code readability and prevent errors by making it clear which arguments are being passed to the function, especially when there are multiple optional parameters with default values, order then doesn't matter for the keyword arguments
+# ignores min_freq and max_freq in total mode but uses in doc mode 
 def build_tier1_vocabulary(
     texts: Sequence[str],
     *,
     top_k: int = 200,
-    min_freq: int | None = None,
-    max_freq: int | None = None,
+    min_freq: float | None = None,
+    max_freq: float | None = None,
     stopwords: Iterable[str] = DEFAULT_STOPWORDS,
+    freq_type: str = "total",
 ) -> List[str]:
     """Build Tier 1 vocabulary from top-k total-frequency non-stopword spaCy tokens."""
     if top_k < 0:
         raise ValueError("top_k must be >= 0")
-    if min_freq is not None and min_freq < 1:
-        raise ValueError("min_freq must be >= 1")
-    if max_freq is not None and max_freq < 1:
-        raise ValueError("max_freq must be >= 1")
-    if min_freq is not None and max_freq is not None and min_freq > max_freq:
-        raise ValueError("min_freq must be <= max_freq")
 
     stopword_set = {w.strip().lower() for w in stopwords}
 
-    total_freq: Counter[str] = Counter()
-    for text in texts:
-        for tok in _spacy_tokens(text):
-            if tok in stopword_set:
-                continue
-            if _is_pure_punctuation(tok):
-                continue
-            total_freq[tok] += 1
+    if freq_type == "total":
+        total_freq: Counter[str] = Counter()
+        for text in texts:
+            for tok in _spacy_tokens(text):
+                if tok in stopword_set:
+                    continue
+                if _is_pure_punctuation(tok):
+                    continue
+                total_freq[tok] += 1
 
-    candidates = []
-    for w, c in total_freq.items():
-        if min_freq is not None and c < min_freq:
-            continue
-        if max_freq is not None and c > max_freq:
-            continue
-        candidates.append((w, c))
+        candidates = []
+        for w, c in total_freq.items():
+            candidates.append((w, c))
 
-    candidates.sort(key=lambda x: (-x[1], x[0]))
-    return [w for w, _ in candidates[:top_k]]
+        candidates.sort(key=lambda x: (-x[1], x[0]))
+        return [w for w, _ in candidates[:top_k]]
+    
+    elif freq_type == "document":
+
+        if min_freq is not None and (min_freq > 1 or min_freq < 0):
+            raise ValueError("min_freq must be >= 0 and <= 1")
+        if max_freq is not None and (max_freq < 0 or max_freq > 1):
+            raise ValueError("max_freq must be >= 0 and <= 1")
+        if min_freq is not None and max_freq is not None and min_freq > max_freq:
+            raise ValueError("min_freq must be <= max_freq")
+        doc_freq: Counter[str] = Counter()
+        for text in texts:
+            tokens = set(_spacy_tokens(text))
+            for tok in tokens:
+                if tok in stopword_set:
+                    continue
+                if _is_pure_punctuation(tok):
+                    continue
+                doc_freq[tok] += 1
+
+        candidates = []
+        for w, c in doc_freq.items():
+            if min_freq is not None and c / len(texts) < min_freq:
+                continue
+            if max_freq is not None and c / len(texts) > max_freq:
+                continue
+            candidates.append((w, c))
+
+        candidates.sort(key=lambda x: (-x[1], x[0]))
+        return [w for w, _ in candidates[:top_k]]
+
+    else:
+        raise ValueError(f"Unsupported frequency type: {freq_type}")
 
 
 # turn a list of words into a list of concept objects
