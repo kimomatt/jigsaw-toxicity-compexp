@@ -1,0 +1,84 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mkimotsu-jigsaw-mean-pool-docfreq-low-sweep
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: mkimotsu-jigsaw-qlora-pvc
+      containers:
+        - name: jigsaw-compexp-docfreq-low-sweep
+          image: pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+          resources:
+            requests:
+              cpu: "8"
+              memory: "64Gi"
+            limits:
+              cpu: "8"
+              memory: "64Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          env:
+            - name: PYTHONPATH
+              value: /workspace/repo
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euxo pipefail
+              cd /workspace
+
+              BASE_DIR=/workspace/compexp_outputs_full_mean_pool
+              SWEEP_ROOT=/workspace/compexp_sweeps
+
+              if [ ! -d "$BASE_DIR" ]; then
+                echo "Base mean-pool output directory not found: $BASE_DIR"
+                exit 1
+              fi
+
+              mkdir -p /workspace/logs "$SWEEP_ROOT"
+              LOG_FILE=/workspace/logs/compexp_mean_pool_docfreq_low_sweep_$(date +%Y%m%d_%H%M%S).log
+              exec > >(tee "$LOG_FILE") 2>&1
+
+              pip install -U "numpy<2" tensorboard
+              pip install -U \
+                "transformers==4.44.2" \
+                "huggingface_hub==0.25.2" \
+                "datasets==2.18.0" \
+                "accelerate==0.33.0" \
+                "evaluate==0.4.1" \
+                "pandas" \
+                "iterative-stratification" \
+                "scikit-learn" \
+                "spacy"
+
+              python -m spacy download en_core_web_sm
+
+              min_freq=0.0
+              for max_freq in 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45; do
+                min_tag="${min_freq//./p}"
+                max_tag="${max_freq//./p}"
+                run_dir="$SWEEP_ROOT/mean_pool_docfreq_min_${min_tag}_max_${max_tag}"
+
+                rm -rf "$run_dir"
+                cp -R "$BASE_DIR" "$run_dir"
+
+                python /workspace/repo/compexp_toxicity/compexp/make_tier1_concept_matrix.py \
+                  --run-output-dir "$run_dir" \
+                  --top-k 2000 \
+                  --freq-type document \
+                  --min-freq "$min_freq" \
+                  --max-freq "$max_freq" \
+                  --stopword-mode nltk
+
+                python /workspace/repo/compexp_toxicity/compexp/analyze.py \
+                  --path_to_activations "$run_dir/val_activations.npy" \
+                  --path_to_concept_matrix "$run_dir/conceptset_tier1/conceptset_tier1.npy" \
+                  --path_to_concept_names "$run_dir/conceptset_tier1/conceptset_tier1_names.txt" \
+                  --result_dir "$run_dir/results"
+              done

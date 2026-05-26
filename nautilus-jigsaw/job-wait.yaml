@@ -18,11 +18,11 @@ spec:
             requests:
               cpu: "8"
               memory: "64Gi"
-              nvidia.com/gpu: 1
+              # nvidia.com/gpu: 1
             limits:
               cpu: "8"
               memory: "64Gi"
-              nvidia.com/gpu: 1
+              # nvidia.com/gpu: 1
           volumeMounts:
             - name: workspace
               mountPath: /workspace
