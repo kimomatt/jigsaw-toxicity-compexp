@@ -413,12 +413,18 @@ def parse_args():
     parser.add_argument("--path_to_concept_matrix", type=Path, help="Path to the tier 1 concept matrix numpy file", default="/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1.npy")
     parser.add_argument("--path_to_concept_names", type=Path, help="Path to the tier 1 concept names text file", default="/workspace/compexp_outputs_full/conceptset_tier1/conceptset_tier1_names.txt")
     parser.add_argument("--result_dir", type=Path, help="Directory to save the analysis results", default=settings.RESULT)
+    parser.add_argument(
+        "--global-ranking-only",
+        action="store_true",
+        help="Skip interval beam-search analysis and only print the global neuron/concept IoU ranking.",
+    )
     return parser.parse_args()
 
 def main():
 
     args = parse_args()
-    # run_analysis(args.path_to_activations, args.path_to_concept_matrix, args.path_to_concept_names, args.result_dir)
+    if not args.global_ranking_only:
+        run_analysis(args.path_to_activations, args.path_to_concept_matrix, args.path_to_concept_names, args.result_dir)
     
     
 
