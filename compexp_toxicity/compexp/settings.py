@@ -4,7 +4,9 @@ Settings
 
 
 # neurons range from 0 to 4096 for the llama 3.1 8b model
-NEURONS = [277, 111, 1547]
+# NEURONS = [277, 111, 1547]
+
+NEURONS = [1021, 2301, 1932]
 
 ALPHA = 0.1
 RESULT = "/workspace/compexp_outputs_full/results"

@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mkimotsu-jigsaw-analysis-top3-mean-pool-nltk
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: mkimotsu-jigsaw-qlora-pvc
+      containers:
+        - name: jigsaw-analysis-top3-mean-pool-nltk
+          image: pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+          resources:
+            requests:
+              cpu: "8"
+              memory: "64Gi"
+            limits:
+              cpu: "8"
+              memory: "64Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          env:
+            - name: PYTHONPATH
+              value: /workspace/repo
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euxo pipefail
+              cd /workspace
+
+              mkdir -p /workspace/logs
+              LOG_FILE=/workspace/logs/analysis_top3_mean_pool_nltk_$(date +%Y%m%d_%H%M%S).log
+              exec > >(tee "$LOG_FILE") 2>&1
+
+              pip install -U "numpy<2" tensorboard
+              pip install -U \
+                "transformers==4.44.2" \
+                "huggingface_hub==0.25.2" \
+                "datasets==2.18.0" \
+                "accelerate==0.33.0" \
+                "evaluate==0.4.1" \
+                "pandas" \
+                "iterative-stratification" \
+                "scikit-learn" \
+                "spacy" \
+                "matplotlib"
+
+              python -m spacy download en_core_web_sm
+
+              python -m compexp_toxicity.compexp.analyze \
+                --path_to_activations /workspace/compexp_outputs_full_mean_pool_nltk/val_activations.npy \
+                --path_to_concept_matrix /workspace/compexp_outputs_full_mean_pool_nltk/conceptset_tier1/conceptset_tier1.npy \
+                --path_to_concept_names /workspace/compexp_outputs_full_mean_pool_nltk/conceptset_tier1/conceptset_tier1_names.txt \
+                --result_dir /workspace/compexp_outputs_full_mean_pool_nltk/results_top3
