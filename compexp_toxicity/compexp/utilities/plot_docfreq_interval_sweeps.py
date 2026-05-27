@@ -27,7 +27,7 @@ def main():
     for run_dir in sorted(SWEEP_ROOT.iterdir()):
         if not run_dir.is_dir():
             continue
-        if not run_dir.name.startswith("mean_pool_docfreq_min_"):
+        if not run_dir.name.startswith("mean_pool_docfreq_min_0p0_"):
             continue
 
         json_path = run_dir / "results" / "interval_analysis.json"
