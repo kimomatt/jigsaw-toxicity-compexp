@@ -423,37 +423,54 @@ def main():
     
 
     # map from concept and neuron to iou score, to find the overall highest iou concepts
-    # top_concepts = {}
 
-    # for neuron in range(activations.shape[1]):
-        
-    #     concept_iou_map = {}
-    #     # print(f"Analyzing neuron {neuron}")
+    activations = np.load(args.path_to_activations)
 
-    #     # go through each column of the tier 1 concept matrix and compute the iou with the target neuron activations, and then sort the concepts by iou to find the top strongest concepts that we can use as a starting point for our beam search to find a compositional explanation that has high iou with the target neuron activations. We can save these top strong concepts and their ious as part of our results for analysis and visualization in the sentence report.
+    tier1_concept_matrix = np.load(args.path_to_concept_matrix)
+    tier1_concept_matrix = tier1_concept_matrix.astype(bool)
 
-    #     for concept_idx in range(tier1_concept_matrix.shape[1]):
-    #         concept_vector = tier1_concept_matrix[:, concept_idx]
-    #         neuron_vector = acts[:, neuron]
-    #         iou_score = iou(concept_vector, neuron_vector)
-    #         # save the iou for this concept and neuron
-    #         concept_iou_map[concept_idx] = iou_score
+    with open(args.path_to_concept_names, "r", encoding="utf-8") as f:
+        tier1_concept_names = [line.strip() for line in f]
 
-    #     # sort concepts by iou and print top concept for this neuron
-    #     sorted_concepts = sorted(concept_iou_map.items(), key=lambda x: x[1], reverse=True)
-    #     # print(f"  Top concept for neuron {neuron}:")
-    #     for i in range(min(1, len(sorted_concepts))):
-    #         concept_idx, score = sorted_concepts[i]
-    #         concept_name = tier1_concept_names[concept_idx].split("::")[1] if "::" in tier1_concept_names[concept_idx] else tier1_concept_names[concept_idx]
-    #         # print(f"    {concept_name} ({concept_idx}): {score}")
-    #         top_concepts[(neuron, concept_name, concept_idx)] = score
+    # map from neuron and concept to iou score, to find the overall highest iou concepts across all neurons
+    top_concepts = {}
+    for neuron in range(activations.shape[1]):
+        concept_iou_map = {}
+        print(f"Analyzing neuron {neuron}")
+        intervals = compute_activation_intervals(activations[:, neuron], settings.NUM_CLUSTERS)
 
-    # # print 100 top concepts overall by iou
-    # sorted_top_concepts = sorted(top_concepts.items(), key=lambda x: x[1], reverse=True)
-    # print("Top concepts overall by IoU:")
-    # for i in range(min(100, len(sorted_top_concepts))):
-    #     (neuron, concept_name, concept_idx), score = sorted_top_concepts[i]
-    #     print(f"  Neuron {neuron}, Concept: {concept_name}, IoU: {score}, lift: {lift(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}, support: {support(tier1_concept_matrix[:, concept_idx], acts[:, neuron])}")
+
+        for interval in intervals:
+            neuron_vector = binarize_activations(activations[:, neuron], interval)
+            # go through each column of the tier 1 concept matrix and compute the iou with the target neuron activations, and then sort the concepts by iou to find the top strongest concepts that we can use as a starting point for our beam search to find a compositional explanation that has high iou with the target neuron activations. We can save these top strong concepts and their ious as part of our results for analysis and visualization in the sentence report.
+            for concept_idx in range(tier1_concept_matrix.shape[1]):
+                concept_vector = tier1_concept_matrix[:, concept_idx]
+                iou_score = iou(concept_vector, neuron_vector)
+                # save the best IoU and winning interval for this concept on this neuron
+                if concept_idx not in concept_iou_map or iou_score > concept_iou_map[concept_idx]["iou"]:
+                    concept_iou_map[concept_idx] = {
+                        "iou": iou_score,
+                        "interval": interval,
+                    }
+
+        # sort concepts by iou and print top concept for this neuron
+        sorted_concepts = sorted(concept_iou_map.items(), key=lambda x: x[1]["iou"], reverse=True)
+        # print(f"  Top concept for neuron {neuron}:")
+        for i in range(min(1, len(sorted_concepts))):
+            concept_idx, best = sorted_concepts[i]
+            concept_name = tier1_concept_names[concept_idx].split("::")[1] if "::" in tier1_concept_names[concept_idx] else tier1_concept_names[concept_idx]
+            top_concepts[(neuron, concept_name, concept_idx)] = best
+    
+    # sort top concepts across all neurons by iou score and print top 10 overall
+    sorted_top_concepts = sorted(top_concepts.items(), key=lambda x: x[1]["iou"], reverse=True)
+    print(f"Top concepts across all neurons:")
+    for i in range(min(10, len(sorted_top_concepts))):
+        (neuron, concept_name, concept_idx), best = sorted_top_concepts[i]
+        interval = best["interval"]
+        print(
+            f"  Neuron {neuron}, Concept: {concept_name} ({concept_idx}), "
+            f"IoU: {best['iou']}, Interval: ({interval[0]}, {interval[1]})"
+        )
 
 if __name__ == "__main__":
     main()
