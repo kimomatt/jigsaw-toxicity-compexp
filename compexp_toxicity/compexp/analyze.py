@@ -418,7 +418,7 @@ def parse_args():
 def main():
 
     args = parse_args()
-    run_analysis(args.path_to_activations, args.path_to_concept_matrix, args.path_to_concept_names, args.result_dir)
+    # run_analysis(args.path_to_activations, args.path_to_concept_matrix, args.path_to_concept_names, args.result_dir)
     
     
 
